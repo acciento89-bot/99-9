@@ -31,4 +31,8 @@ v1.0.0 (1) mobile playtest.
 - App Store version: 1.0.0
 - Build: 1
 
+## Validation
+
+GitHub Actions is the release gate for the first device build: Godot parse/smoke test, unsigned iOS compile, and Android debug APK export must pass before TestFlight upload.
+
 The first milestone is a clean device/TestFlight validation before monetization work begins.
