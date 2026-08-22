@@ -2,37 +2,94 @@
 
 ## Current target
 
-v1.0.0 (1) mobile playtest.
+v1.0.0 Build 2 mobile playtest.
 
-## Included
+## Core gameplay
 
-- Core one-tap precision loop
+- One-tap precision loop
 - 99.900% streak threshold
 - 100.000% perfect hit
 - Increasing difficulty through streak speed
 - Local best score / best streak persistence
 - Portrait phone/tablet UI
 - iOS + Android export presets
-- Basic app icon
 
-## Intentionally excluded from first device test
+## Build 1 baseline
 
-- Ads
-- Consent / ATT
-- Analytics
-- Leaderboards
-- Cloud saves
-- In-app purchases
-
-## Mobile validation
-
-GitHub Actions run 32576070461 passed all three initial gates:
+GitHub Actions run 32576070461 passed:
 
 - Godot 4.7.2 project parse + main-scene smoke test: PASS
 - iOS Godot export + unsigned Xcode generic-device compile on macOS 26: PASS
 - Android debug APK export: PASS
 
-PR #1 was squash-merged after the green validation run.
+Build 1 was uploaded through the One More Floor TestFlight bridge and physically validated on a real iPhone on 2026-08-22.
+
+Validated on-device:
+
+- App launch: PASS
+- Portrait layout: PASS
+- Tap to start / stop: PASS
+- Result screen: PASS
+- 99.900%+ streak threshold: PASS
+- Streak increment: PASS
+- Next-round flow: PASS
+- Local best persistence/display: PASS
+
+Observed results included 99.929% and a near-perfect 99.993%.
+
+## Build 2 feature milestone
+
+PR #2 was squash-merged to main after GitHub Actions run 32578200206 passed all platform gates:
+
+- Godot parse + main-scene smoke: PASS
+- iOS Xcode device compile: PASS
+- Android debug APK export: PASS
+
+Build 2 adds:
+
+- Main menu: PLAY / WORLD LEADERBOARD / STATS / SETTINGS
+- In-game PAUSE button
+- Pause actions: RESUME / RESTART RUN / MAIN MENU
+- Gameplay tap handling moved to `_unhandled_input` so menu/pause button taps cannot accidentally stop a round
+- Persistent random per-installation player UUID
+- Editable worldwide leaderboard display name
+- Local stats screen
+- Android internet permission
+
+## Global leaderboard backend
+
+Supabase project `bqctetqraszsvknczjjr` hosts a fully isolated 99.9% backend using only `ninenine_*` resources.
+
+Created:
+
+- `public.ninenine_players`
+- `public.ninenine_score_events`
+- `public.ninenine_leaderboard_hit`
+- `public.ninenine_leaderboard_streak`
+- RPC `ninenine_submit_score`
+- RPC `ninenine_set_name`
+- Edge Function `ninenine-leaderboard`
+
+Security/design:
+
+- RLS enabled on both tables
+- direct anon/authenticated table access revoked
+- direct client RPC execution revoked
+- Edge Function uses service-role access internally
+- leaderboard RPC streak is calculated server-side from submitted round scores; client cannot submit an arbitrary streak value
+- 300 ms server-side minimum submission interval
+- score range constrained to 0..100000 milli-percent
+- score-event history retained for audit/debugging
+- gameplay never blocks if leaderboard networking fails
+
+Global ranking modes:
+
+1. BEST HIT — best percentage descending, then best streak, then perfect-count tie-break
+2. LONGEST STREAK — best streak descending, then best percentage, then perfect-count tie-break
+
+The leaderboard is shared across iOS and Android.
+
+A transactional server smoke test passed after fixing a PL/pgSQL name-conflict in `ninenine_set_name`: player name write, 99.950% score submission, server-calculated streak=1, best-hit update and game-count increment all passed; the temporary test player was deleted.
 
 ## Apple
 
@@ -40,54 +97,31 @@ PR #1 was squash-merged after the green validation run.
 - Bundle ID: de.kamilunavo.ninenine
 - Apple internal App ID name: Nine Nine
 - App Store version: 1.0.0
-- Build: 1
-- Bundle ID registration: COMPLETE via One More Floor App Store Connect bridge
-- App Store Connect app record: COMPLETE
+- Build 1: physically validated
+- Build 2: next TestFlight target
 
-## TestFlight
+One More Floor retains the App Store Connect API signing secrets and `NINENINE_REPO_TOKEN` provides read-only access to the private `acciento89-bot/99-9` source for the TestFlight bridge.
 
-One More Floor hosts the TestFlight bridge and keeps the existing App Store Connect API signing secrets. `NINENINE_REPO_TOKEN` provides read-only access to the private `acciento89-bot/99-9` source.
+## Still intentionally excluded
 
-TestFlight bridge run 32577023811 completed successfully:
-
-1. Private 99-9 checkout: PASS
-2. App Store Connect app lookup: PASS
-3. Godot 4.7.2 macOS + iOS template setup: PASS
-4. Godot iOS Xcode export: PASS
-5. Xcode scheme resolution: PASS
-6. Release archive creation: PASS
-7. Apple automatic/cloud signing + TestFlight upload: PASS
-
-The upload of v1.0.0 (1) was accepted successfully by Apple's upload tooling.
-
-## Physical device validation
-
-Build 1 was installed and tested on a real iPhone through TestFlight on 2026-08-22.
-
-Validated on-device:
-
-- App launches normally: PASS
-- Portrait layout renders correctly: PASS
-- Tap to start: PASS
-- Tap to stop: PASS
-- Result screen: PASS
-- 99.900%+ streak threshold: PASS
-- Streak increments correctly: PASS
-- Next-round flow: PASS
-- Local best score persistence/display: PASS
-
-Observed test results included 99.929% and a near-perfect best of 99.993%, confirming the precision loop is playable and the target window is reachable on real hardware.
-
-Physical-device gameplay validation for v1.0.0 (1): PASS.
+- Ads / AdMob
+- Consent / ATT
+- Analytics
+- Cloud saves
+- In-app purchases
 
 ## Next milestone
 
-Move into a dedicated game-feel/polish pass before monetization:
+Upload Build 2 to TestFlight and physically validate:
 
-- haptic feedback
-- sound feedback
-- stronger near-miss/perfect-hit presentation
-- subtle motion/juice improvements
-- UI/performance cleanup
+- main-menu navigation
+- pause/resume while meter is moving
+- restart run
+- return to main menu
+- settings player-name save
+- worldwide Best Hit leaderboard load
+- worldwide Longest Streak leaderboard load
+- score submission after a completed round
+- no accidental gameplay stop from UI button taps
 
-Ads, consent, analytics, leaderboards and other monetization-related work remain intentionally out of the validated Build 1 baseline until the polish pass is reviewed.
+Monetization remains blocked until Build 2 passes this device regression.
