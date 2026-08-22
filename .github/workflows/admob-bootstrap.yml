@@ -18,51 +18,69 @@ jobs:
         with:
           ref: feature/build8-admob-test
 
-      - name: Inspect release and vendor Godot editor addon
+      - name: Vendor editor addon and native Godot 4.7.2 templates
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/admob"
-          gh api repos/poingstudios/godot-admob-plugin/releases/tags/v5.0.0 > "$RUNNER_TEMP/release.json"
-          jq -r '.assets[].name' "$RUNNER_TEMP/release.json" | tee "$RUNNER_TEMP/assets.txt"
+          ROOT="$RUNNER_TEMP/admob"
+          mkdir -p "$ROOT"
+          gh api repos/poingstudios/godot-admob-plugin/releases/tags/v5.0.0 > "$ROOT/release.json"
+          jq -r '.assets[].name' "$ROOT/release.json" | tee "$ROOT/assets.txt"
 
           mkdir -p docs
           {
             echo '# AdMob v5.0.0 release assets'
             echo
-            cat "$RUNNER_TEMP/assets.txt"
+            cat "$ROOT/assets.txt"
           } > docs/ADMOB_BOOTSTRAP_ASSETS.txt
 
-          ASSET=$(jq -r '[.assets[].name | select(test("godot-admob"; "i")) | select(endswith(".zip")) | select(test("template|android|ios|csharp"; "i")|not)][0] // empty' "$RUNNER_TEMP/release.json")
-          if [[ -z "$ASSET" ]]; then
-            ASSET=$(jq -r '[.assets[].name | select(endswith(".zip")) | select(test("template|android|ios|csharp"; "i")|not)][0] // empty' "$RUNNER_TEMP/release.json")
-          fi
-          if [[ -z "$ASSET" ]]; then
-            echo 'Could not identify editor addon zip.' >&2
-            exit 1
-          fi
-          echo "Selected editor asset: $ASSET"
-          gh release download v5.0.0 --repo poingstudios/godot-admob-plugin --pattern "$ASSET" --dir "$RUNNER_TEMP/admob"
-          unzip -q "$RUNNER_TEMP/admob/$ASSET" -d "$RUNNER_TEMP/admob/extracted"
+          EDITOR_ASSET=$(jq -r '[.assets[].name | select(test("godot-admob"; "i")) | select(endswith(".zip")) | select(test("template|android|ios|csharp"; "i")|not)][0] // empty' "$ROOT/release.json")
+          test -n "$EDITOR_ASSET"
+          echo "Editor asset: $EDITOR_ASSET"
 
-          ADDON=$(find "$RUNNER_TEMP/admob/extracted" -type d -path '*/addons/admob' | head -1)
-          if [[ -z "$ADDON" ]]; then
-            echo 'addons/admob not found in selected release package.' >&2
-            find "$RUNNER_TEMP/admob/extracted" -maxdepth 4 -type d | sort | head -200
-            exit 1
-          fi
+          gh release download v5.0.0 --repo poingstudios/godot-admob-plugin \
+            --pattern "$EDITOR_ASSET" \
+            --pattern 'android-template-v4.7.2.zip' \
+            --pattern 'ios-template-v4.7.2.zip' \
+            --dir "$ROOT"
+
+          rm -rf "$ROOT/editor" "$ROOT/android" "$ROOT/ios"
+          mkdir -p "$ROOT/editor" "$ROOT/android" "$ROOT/ios"
+          unzip -q "$ROOT/$EDITOR_ASSET" -d "$ROOT/editor"
+          unzip -q "$ROOT/android-template-v4.7.2.zip" -d "$ROOT/android"
+          unzip -q "$ROOT/ios-template-v4.7.2.zip" -d "$ROOT/ios"
+
+          ADDON=$(find "$ROOT/editor" -type d -path '*/addons/admob' | head -1)
+          test -n "$ADDON"
           rm -rf addons/admob
           mkdir -p addons
           cp -R "$ADDON" addons/admob
 
+          mkdir -p addons/admob/android/bin ios/plugins
+          cp -R "$ROOT/android/." addons/admob/android/bin/
+          cp -R "$ROOT/ios/." ios/plugins/
+
+          IOS_GDIP=$(find ios/plugins -type f -name 'poing-godot-admob-ads.gdip' | head -1)
+          test -n "$IOS_GDIP"
+          sed -i 's/ca-app-pub-[0-9]*~[0-9]*/ca-app-pub-3940256099942544~1458002511/g' "$IOS_GDIP"
+
+          {
+            echo
+            echo '## Installed native templates'
+            echo '- Android: android-template-v4.7.2.zip -> addons/admob/android/bin/'
+            echo '- iOS: ios-template-v4.7.2.zip -> ios/plugins/'
+            echo '- iOS demo App ID: ca-app-pub-3940256099942544~1458002511'
+            echo '- Android demo App ID is provided by the AdMob project setting default: ca-app-pub-3940256099942544~3347511713'
+          } >> docs/ADMOB_BOOTSTRAP_ASSETS.txt
+
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add addons/admob docs/ADMOB_BOOTSTRAP_ASSETS.txt
+          git add addons/admob ios/plugins docs/ADMOB_BOOTSTRAP_ASSETS.txt
           if git diff --cached --quiet; then
             echo 'No AdMob bootstrap changes.'
             exit 0
           fi
-          git commit -m 'Vendor Godot AdMob 5.0.0 editor addon'
+          git commit -m 'Vendor AdMob native templates for Godot 4.7.2'
           git push origin HEAD:feature/build8-admob-test
