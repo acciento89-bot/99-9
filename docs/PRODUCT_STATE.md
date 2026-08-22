@@ -2,7 +2,7 @@
 
 ## Current target
 
-v1.0.0 Build 2 mobile playtest.
+v1.0.0 Build 2 physical-device playtest.
 
 ## Core gameplay
 
@@ -89,16 +89,29 @@ Global ranking modes:
 
 The leaderboard is shared across iOS and Android.
 
-A transactional server smoke test passed after fixing a PL/pgSQL name-conflict in `ninenine_set_name`: player name write, 99.950% score submission, server-calculated streak=1, best-hit update and game-count increment all passed; the temporary test player was deleted.
+Validation:
 
-## Apple
+- transactional database smoke: PASS
+- player-name write: PASS
+- 99.950% score submission: PASS
+- server-calculated streak=1: PASS
+- best-hit/game-count update: PASS
+- live Edge Function HTTP client path: PASS (HTTP 200)
+
+The live HTTP gate is part of the mobile build workflow so a deploy with a broken leaderboard endpoint cannot be treated as release-ready.
+
+## Apple / TestFlight
 
 - Team: TKG684N5GL
 - Bundle ID: de.kamilunavo.ninenine
 - Apple internal App ID name: Nine Nine
 - App Store version: 1.0.0
 - Build 1: physically validated
-- Build 2: next TestFlight target
+- Build 2: uploaded successfully via One More Floor bridge run 32578442242
+
+Build 2 passed private-source checkout, Godot 4.7.2 iOS export, Xcode release archive, Apple automatic/cloud signing and TestFlight upload.
+
+Immediate App Store Connect API checks after the accepted upload returned `NOT_VISIBLE_YET`, meaning Apple has accepted the upload but has not surfaced Build 2 in the Builds API yet. Do not upload another build while Build 2 is processing.
 
 One More Floor retains the App Store Connect API signing secrets and `NINENINE_REPO_TOKEN` provides read-only access to the private `acciento89-bot/99-9` source for the TestFlight bridge.
 
@@ -112,16 +125,18 @@ One More Floor retains the App Store Connect API signing secrets and `NINENINE_R
 
 ## Next milestone
 
-Upload Build 2 to TestFlight and physically validate:
+When Build 2 appears in TestFlight, physically validate:
 
 - main-menu navigation
-- pause/resume while meter is moving
+- pause while the meter is moving
+- resume without meter jump/regression
 - restart run
 - return to main menu
 - settings player-name save
+- complete at least one round to enter the global ranking
 - worldwide Best Hit leaderboard load
 - worldwide Longest Streak leaderboard load
-- score submission after a completed round
+- own rank/display name
 - no accidental gameplay stop from UI button taps
 
 Monetization remains blocked until Build 2 passes this device regression.
