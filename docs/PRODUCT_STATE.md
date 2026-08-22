@@ -35,4 +35,6 @@ v1.0.0 (1) mobile playtest.
 
 GitHub Actions is the release gate for the first device build: Godot parse/smoke test, unsigned iOS compile, and Android debug APK export must pass before TestFlight upload.
 
+A dedicated pull request validation run is used to expose all workflow job results before the TestFlight bridge is enabled.
+
 The first milestone is a clean device/TestFlight validation before monetization work begins.
