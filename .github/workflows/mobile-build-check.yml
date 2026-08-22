@@ -27,7 +27,6 @@ jobs:
           unzip -q godot.zip
           mv "Godot_v${GODOT_TAG}_linux.x86_64" godot
           chmod +x godot
-          ./godot --version
       - name: Parse project
         shell: bash
         run: |
@@ -129,7 +128,7 @@ jobs:
           if [[ ! -f "$HOME/.android/debug.keystore" ]]; then
             keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Android Debug,O=Android,C=US'
           fi
-      - name: Install Godot, templates and Gradle build template
+      - name: Install Godot, templates and deterministic Gradle build template
         shell: bash
         run: |
           set -euo pipefail
@@ -141,9 +140,14 @@ jobs:
           curl -L --fail --retry 3 -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_export_templates.tpz"
           unzip -q templates.tpz -d templates
           cp -R templates/templates/. "$T/"
+          test -f "$T/android_source.zip"
           ./godot --headless --editor --path . --quit
-          ./godot --headless --path . --install-android-build-template
+          rm -rf android/build
+          mkdir -p android/build
+          unzip -q "$T/android_source.zip" -d android/build
           test -f android/build/build.gradle || test -f android/build/build.gradle.kts
+          test -f android/build/gradlew
+          chmod +x android/build/gradlew
       - name: Export Android debug APK with Billing plugin
         shell: bash
         run: |
