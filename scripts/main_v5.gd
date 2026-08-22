@@ -6,6 +6,7 @@ extends "res://scripts/main_v4.gd"
 
 var store_prices: Dictionary = {}
 var store_connected := false
+var store_message := "CONNECTING TO STORE..."
 var restore_button: Button
 
 func _ready() -> void:
@@ -34,8 +35,11 @@ func _activate_preview_theme() -> void:
         return
 
     var price: String = iap_service.get_display_price(preview_theme_id)
-    if not store_connected or price.is_empty():
-        theme_status_label.text = "STORE IS STILL LOADING · TRY AGAIN IN A MOMENT"
+    if not store_connected:
+        theme_status_label.text = "STORE CONNECTION UNAVAILABLE · REOPEN DESIGNS TO RETRY"
+        return
+    if price.is_empty():
+        theme_status_label.text = "STORE CONNECTED · APP STORE ITEM IS NOT AVAILABLE YET"
         return
 
     theme_action_button.disabled = true
@@ -58,8 +62,12 @@ func _refresh_theme_screen() -> void:
     else:
         var price: String = str(store_prices.get(preview_theme_id, ""))
         if price.is_empty():
-            theme_preview_detail.text = "PREMIUM · STORE PRICE LOADING"
-            theme_action_button.text = "CONNECTING TO STORE..."
+            if store_connected:
+                theme_preview_detail.text = "PREMIUM · APP STORE ITEM UNAVAILABLE"
+                theme_action_button.text = "NOT AVAILABLE YET"
+            else:
+                theme_preview_detail.text = "PREMIUM · CONNECTING TO APP STORE"
+                theme_action_button.text = "CONNECTING TO STORE..."
             theme_action_button.disabled = true
         else:
             theme_preview_detail.text = "PREMIUM · %s · ONE-TIME PURCHASE" % price
@@ -71,17 +79,21 @@ func _refresh_theme_screen() -> void:
 
 func _on_store_state_changed(ready: bool, message: String) -> void:
     store_connected = ready
+    store_message = message.to_upper()
     if restore_button != null:
         restore_button.disabled = not ready
-    if screen == AppScreen.THEMES and not ready:
-        theme_status_label.text = message.to_upper()
     _refresh_theme_screen()
+    if screen == AppScreen.THEMES:
+        theme_status_label.text = store_message
 
 func _on_store_products_updated(prices: Dictionary) -> void:
     store_prices = prices.duplicate()
     _refresh_theme_screen()
     if screen == AppScreen.THEMES:
-        theme_status_label.text = "STORE READY · PREMIUM DESIGNS ARE PERMANENT UNLOCKS"
+        if store_prices.is_empty():
+            theme_status_label.text = "STORE CONNECTED · APPLE RETURNED 0 PREMIUM PRODUCTS"
+        else:
+            theme_status_label.text = "STORE READY · %d PREMIUM PRODUCT%s" % [store_prices.size(), "" if store_prices.size() == 1 else "S"]
 
 func _on_store_entitlements_updated(theme_ids: Array[String]) -> void:
     var changed := false
