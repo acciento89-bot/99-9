@@ -52,8 +52,8 @@ jobs:
           eval "$(python3 - <<'PY'
           import re, shlex
           text=open('scripts/leaderboard_service.gd', encoding='utf-8').read()
-          url=re.search(r'const FUNCTION_URL := "([^"]+)"', text)
-          key=re.search(r'const ANON_KEY := "([^"]+)"', text)
+          url=re.search(r'const FUNCTION_URL := \"([^\"]+)\"', text)
+          key=re.search(r'const ANON_KEY := \"([^\"]+)\"', text)
           if not url or not key: raise SystemExit('Leaderboard client configuration not found')
           print('FUNCTION_URL='+shlex.quote(url.group(1)))
           print('ANON_KEY='+shlex.quote(key.group(1)))
@@ -145,6 +145,8 @@ jobs:
           rm -rf android/build
           mkdir -p android/build
           unzip -q "$T/android_source.zip" -d android/build
+          printf '%s\n' "${GODOT_VERSION}.stable" > android/.build_version
+          test "$(cat android/.build_version)" = "${GODOT_VERSION}.stable"
           test -f android/build/build.gradle || test -f android/build/build.gradle.kts
           test -f android/build/gradlew
           chmod +x android/build/gradlew
