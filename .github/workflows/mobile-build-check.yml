@@ -42,6 +42,33 @@ jobs:
           ./godot --headless --path . --quit-after 5 2>&1 | tee smoke.log
           if grep -E "SCRIPT ERROR|Parse Error|Compile Error|Failed to load script" smoke.log; then exit 1; fi
 
+  backend-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Verify live global leaderboard endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          eval "$(python3 - <<'PY'
+          import re, shlex
+          text=open('scripts/leaderboard_service.gd', encoding='utf-8').read()
+          url=re.search(r'const FUNCTION_URL := "([^"]+)"', text)
+          key=re.search(r'const ANON_KEY := "([^"]+)"', text)
+          if not url or not key:
+              raise SystemExit('Leaderboard client configuration not found')
+          print('FUNCTION_URL='+shlex.quote(url.group(1)))
+          print('ANON_KEY='+shlex.quote(key.group(1)))
+          PY
+          )"
+          curl --fail-with-body -sS \
+            -H "Authorization: Bearer $ANON_KEY" \
+            -H "apikey: $ANON_KEY" \
+            "$FUNCTION_URL?mode=hit&limit=1&player_id=00000000-0000-4000-8000-000000000002" \
+            -o leaderboard.json
+          jq -e '.mode == "hit" and (.top | type == "array")' leaderboard.json >/dev/null
+
   ios-unsigned:
     runs-on: macos-26
     timeout-minutes: 35
