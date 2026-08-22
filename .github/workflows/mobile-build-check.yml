@@ -1,0 +1,146 @@
+name: 99.9 Mobile Build Check
+
+on:
+  push:
+    branches: [main, 'agent/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GODOT_VERSION: '4.7.2'
+  GODOT_TAG: '4.7.2-stable'
+
+jobs:
+  godot-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Download Godot
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 -o godot.zip \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_linux.x86_64.zip"
+          unzip -q godot.zip
+          mv "Godot_v${GODOT_TAG}_linux.x86_64" godot
+          chmod +x godot
+          ./godot --version
+      - name: Parse project
+        shell: bash
+        run: |
+          set -o pipefail
+          ./godot --headless --editor --path . --quit 2>&1 | tee parse.log
+          if grep -E "SCRIPT ERROR|Parse Error|Compile Error|Failed to load script|Error.*SVG" parse.log; then exit 1; fi
+      - name: Main-scene smoke test
+        shell: bash
+        run: |
+          set -o pipefail
+          ./godot --headless --path . --quit-after 5 2>&1 | tee smoke.log
+          if grep -E "SCRIPT ERROR|Parse Error|Compile Error|Failed to load script" smoke.log; then exit 1; fi
+
+  ios-unsigned:
+    runs-on: macos-26
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Godot and templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 -o "$RUNNER_TEMP/godot.zip" \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_macos.universal.zip"
+          mkdir -p "$RUNNER_TEMP/godot"
+          unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP/godot"
+          GODOT="$RUNNER_TEMP/godot/Godot.app/Contents/MacOS/Godot"
+          echo "GODOT=$GODOT" >> "$GITHUB_ENV"
+          T="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$T"
+          curl -L --fail --retry 3 -o "$RUNNER_TEMP/templates.tpz" \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_export_templates.tpz"
+          mkdir -p "$RUNNER_TEMP/templates"
+          unzip -q "$RUNNER_TEMP/templates.tpz" -d "$RUNNER_TEMP/templates"
+          cp -R "$RUNNER_TEMP/templates/templates/." "$T/"
+          test -f "$T/ios.zip"
+      - name: Import and export Xcode project
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$GODOT" --headless --editor --path . --quit
+          mkdir -p build/ios
+          "$GODOT" --headless --path . --export-release "iOS Playtest" build/ios/NineNine.zip
+          test -d build/ios/NineNine.xcodeproj
+          xcodebuild -project build/ios/NineNine.xcodeproj -list -json > "$RUNNER_TEMP/xcode.json"
+          SCHEME=$(python3 - <<'PY2'
+          import json, os
+          d=json.load(open(os.environ['RUNNER_TEMP']+'/xcode.json'))['project']
+          print((d.get('schemes') or d.get('targets') or [''])[0])
+          PY2
+          )
+          test -n "$SCHEME"
+          xcodebuild -project build/ios/NineNine.xcodeproj -scheme "$SCHEME" -configuration Debug \
+            -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+          ditto -c -k --sequesterRsrc build/ios/NineNine.xcodeproj build/ios/NineNine-Xcode.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 99-9-ios-unsigned
+          path: build/ios/NineNine-Xcode.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  android-debug:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK components
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
+          mkdir -p "$HOME/.android"
+          if [[ ! -f "$HOME/.android/debug.keystore" ]]; then
+            keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" -storepass android \
+              -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname 'CN=Android Debug,O=Android,C=US'
+          fi
+      - name: Install Godot and templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 -o godot.zip \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_linux.x86_64.zip"
+          unzip -q godot.zip
+          mv "Godot_v${GODOT_TAG}_linux.x86_64" godot
+          chmod +x godot
+          T="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$T" templates
+          curl -L --fail --retry 3 -o templates.tpz \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_export_templates.tpz"
+          unzip -q templates.tpz -d templates
+          cp -R templates/templates/. "$T/"
+          ./godot --headless --editor --path . --quit
+      - name: Export Android debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/android
+          ./godot --headless --path . --export-debug "Android Playtest" build/android/99-9.apk
+          test -s build/android/99-9.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 99-9-android-debug
+          path: build/android/99-9.apk
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,15 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+<defs>
+  <linearGradient id="g" x1="120" y1="80" x2="900" y2="960" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#11182D"/>
+    <stop offset="1" stop-color="#05070E"/>
+  </linearGradient>
+</defs>
+<rect width="1024" height="1024" fill="url(#g)"/>
+<rect x="42" y="42" width="940" height="940" rx="190" fill="none" stroke="#202943" stroke-width="10"/>
+<rect x="120" y="684" width="784" height="92" rx="46" fill="#171E31"/>
+<rect x="138" y="702" width="742" height="56" rx="28" fill="#4A82FF"/>
+<rect x="870" y="665" width="12" height="130" rx="6" fill="#FFD95A"/>
+<text x="512" y="526" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="250" font-weight="800" fill="#F7F9FF">99.9</text>
+<text x="800" y="526" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="116" font-weight="800" fill="#FFD95A">%</text>
+</svg>

@@ -1,0 +1,6 @@
+.godot/
+build/
+android/build/
+ios/build/
+*.tmp
+.DS_Store
