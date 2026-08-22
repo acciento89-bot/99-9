@@ -33,7 +33,7 @@ func _activate_preview_theme() -> void:
         super._activate_preview_theme()
         return
 
-    var price := iap_service.get_display_price(preview_theme_id)
+    var price: String = iap_service.get_display_price(preview_theme_id)
     if not store_connected or price.is_empty():
         theme_status_label.text = "STORE IS STILL LOADING · TRY AGAIN IN A MOMENT"
         return
@@ -56,7 +56,7 @@ func _refresh_theme_screen() -> void:
     elif owned:
         theme_action_button.disabled = false
     else:
-        var price := str(store_prices.get(preview_theme_id, ""))
+        var price: String = str(store_prices.get(preview_theme_id, ""))
         if price.is_empty():
             theme_preview_detail.text = "PREMIUM · STORE PRICE LOADING"
             theme_action_button.text = "CONNECTING TO STORE..."
