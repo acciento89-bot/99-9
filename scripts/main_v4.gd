@@ -63,7 +63,7 @@ func _draw_atmosphere(colors: Dictionary, subdued: bool) -> void:
         var t := float(i) / 15.0
         var band_y := t * size.y
         var band_h := size.y / 15.0 + 2.0
-        var alpha := (0.022 + (1.0 - abs(t - 0.38) * 1.45) * 0.026) * strength
+        var alpha: float = (0.022 + (1.0 - absf(t - 0.38) * 1.45) * 0.026) * strength
         draw_rect(Rect2(0.0, band_y, size.x, band_h), Color(colors["accent"], maxf(alpha, 0.008)), true)
 
     # Slowly moving glow clouds.
