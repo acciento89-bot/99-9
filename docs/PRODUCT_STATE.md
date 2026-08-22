@@ -2,7 +2,7 @@
 
 ## Current target
 
-v1.0.0 Build 2 physical-device playtest.
+v1.0.0 Build 3 physical-device playtest.
 
 ## Core gameplay
 
@@ -39,26 +39,62 @@ Observed results included 99.929% and a near-perfect 99.993%.
 
 ## Build 2 feature milestone
 
-PR #2 was squash-merged to main after GitHub Actions run 32578200206 passed all platform gates:
+PR #2 was squash-merged to main after GitHub Actions run 32578200206 passed all platform gates.
 
-- Godot parse + main-scene smoke: PASS
-- iOS Xcode device compile: PASS
+Build 2 added:
+
+- Main menu
+- World leaderboard
+- Local stats
+- Settings/player name
+- In-game pause/resume/restart/main-menu flow
+- Persistent per-installation player UUID
+- Supabase cross-platform leaderboard client
+- Android internet permission
+
+Physical-device review of Build 2 confirmed the new menu/stats/leaderboard screens render and navigate, but exposed one real iOS usability regression:
+
+- Player-name LineEdit is visible but tapping it does not enter editable/focused keyboard state: FAIL
+
+The Build 2 menu was also judged functional but too prototype-like, so monetization stayed blocked pending a UI polish pass.
+
+## Build 3 UI / customization milestone
+
+PR #3 was squash-merged to main as commit `dfe18657c2e6ae863366bdf00bcfd55ef83cd354` after GitHub Actions run 32580003697 passed all four gates:
+
+- Godot 4.7.2 parse + main-scene smoke: PASS
+- live Supabase leaderboard endpoint: PASS
+- iOS Godot export + Xcode generic-device compile: PASS
 - Android debug APK export: PASS
 
-Build 2 adds:
+Build 3 replaces the procedural UI controller with `scripts/main_v3.gd` and adds:
 
-- Main menu: PLAY / WORLD LEADERBOARD / STATS / SETTINGS
-- In-game PAUSE button
-- Pause actions: RESUME / RESTART RUN / MAIN MENU
-- Gameplay tap handling moved to `_unhandled_input` so menu/pause button taps cannot accidentally stop a round
-- Persistent random per-installation player UUID
-- Editable worldwide leaderboard display name
-- Local stats screen
-- Android internet permission
+- redesigned main menu with clearer visual hierarchy and a dedicated personal-record card
+- redesigned settings, stats, leaderboard and pause surfaces
+- explicit mobile player-name input hardening:
+  - `editable=true`
+  - `focus_mode=FOCUS_ALL`
+  - `mouse_filter=STOP`
+  - `virtual_keyboard_enabled=true`
+  - select-all-on-focus
+  - caret blink
+  - explicit touch GUI handler calling `grab_focus()`
+  - visible focused border/caret styling
+  - submit-on-keyboard action plus Save Player Name button
+- Designs screen
+- persistent theme selection and ownership structure
+- free MIDNIGHT design
+- premium preview designs:
+  - NEON PULSE
+  - GOLD RUSH
+  - AURORA
+- premium designs can be previewed across the app but cannot be equipped unless owned
+- premium purchase UI is intentionally locked until StoreKit/Google Play Billing wiring is added
+- themes recolor app background, glow, cards, buttons, input field and gameplay meter
 
 ## Global leaderboard backend
 
-Supabase project `bqctetqraszsvknczjjr` hosts a fully isolated 99.9% backend using only `ninenine_*` resources.
+Supabase project `bqctetqraszsvknczjjr` hosts isolated 99.9% resources using the `ninenine_*` namespace.
 
 Created:
 
@@ -72,15 +108,15 @@ Created:
 
 Security/design:
 
-- RLS enabled on both tables
-- direct anon/authenticated table access revoked
+- RLS enabled
+- direct anon/authenticated table writes revoked
 - direct client RPC execution revoked
 - Edge Function uses service-role access internally
-- leaderboard RPC streak is calculated server-side from submitted round scores; client cannot submit an arbitrary streak value
-- 300 ms server-side minimum submission interval
-- score range constrained to 0..100000 milli-percent
+- streak is calculated server-side from submitted round scores
+- 300 ms minimum submission interval
+- score constrained to 0..100000 milli-percent
 - score-event history retained for audit/debugging
-- gameplay never blocks if leaderboard networking fails
+- gameplay never blocks on leaderboard networking failure
 
 Global ranking modes:
 
@@ -92,13 +128,11 @@ The leaderboard is shared across iOS and Android.
 Validation:
 
 - transactional database smoke: PASS
-- player-name write: PASS
+- player-name RPC write: PASS
 - 99.950% score submission: PASS
 - server-calculated streak=1: PASS
 - best-hit/game-count update: PASS
 - live Edge Function HTTP client path: PASS (HTTP 200)
-
-The live HTTP gate is part of the mobile build workflow so a deploy with a broken leaderboard endpoint cannot be treated as release-ready.
 
 ## Apple / TestFlight
 
@@ -107,36 +141,41 @@ The live HTTP gate is part of the mobile build workflow so a deploy with a broke
 - Apple internal App ID name: Nine Nine
 - App Store version: 1.0.0
 - Build 1: physically validated
-- Build 2: uploaded successfully via One More Floor bridge run 32578442242
+- Build 2: physically reviewed; player-name input regression found
+- Build 3: uploaded successfully through One More Floor TestFlight bridge run 32580145642
 
-Build 2 passed private-source checkout, Godot 4.7.2 iOS export, Xcode release archive, Apple automatic/cloud signing and TestFlight upload.
+Build 3 passed private-source checkout, requested build-number resolution to 3, Godot 4.7.2 iOS export, Xcode release archive, Apple automatic/cloud signing and TestFlight upload.
 
-Immediate App Store Connect API checks after the accepted upload returned `NOT_VISIBLE_YET`, meaning Apple has accepted the upload but has not surfaced Build 2 in the Builds API yet. Do not upload another build while Build 2 is processing.
+## Monetization state
 
-One More Floor retains the App Store Connect API signing secrets and `NINENINE_REPO_TOKEN` provides read-only access to the private `acciento89-bot/99-9` source for the TestFlight bridge.
-
-## Still intentionally excluded
+Still intentionally not live:
 
 - Ads / AdMob
 - Consent / ATT
 - Analytics
-- Cloud saves
-- In-app purchases
+- StoreKit / Google Play Billing
+- paid-theme entitlements
+- cloud saves
 
-## Next milestone
+The visual/ownership shell for paid designs now exists. Premium themes must use platform IAP before they can be sold or permanently equipped.
 
-When Build 2 appears in TestFlight, physically validate:
+## Build 3 physical-device checklist
 
-- main-menu navigation
-- pause while the meter is moving
-- resume without meter jump/regression
-- restart run
-- return to main menu
-- settings player-name save
-- complete at least one round to enter the global ranking
-- worldwide Best Hit leaderboard load
-- worldwide Longest Streak leaderboard load
-- own rank/display name
-- no accidental gameplay stop from UI button taps
+When Build 3 appears in TestFlight, validate on iPhone:
 
-Monetization remains blocked until Build 2 passes this device regression.
+- redesigned main menu renders correctly
+- PLAY / WORLD RANKING / MY STATS / DESIGNS / SETTINGS navigation
+- tap Player Name field -> keyboard opens and field becomes editable
+- type a different name and save it
+- saved name persists after leaving/reopening settings
+- saved name appears in stats and global ranking after score sync
+- MIDNIGHT equips normally
+- NEON PULSE preview changes the app look
+- GOLD RUSH preview changes the app look
+- AURORA preview changes the app look
+- leaving Designs reverts locked preview to the owned/equipped theme
+- premium themes cannot be permanently equipped yet
+- pause/resume/restart/gameplay still work
+- no UI tap accidentally triggers gameplay
+
+Only after this device pass should StoreKit/Google Play Billing products for premium designs be wired.
