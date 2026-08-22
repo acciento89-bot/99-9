@@ -2,7 +2,9 @@
 
 ## Current target
 
-v1.0.0 Build 4 physical-device regression test.
+v1.0.0 Build 5 premium purchase / restore physical-device test in TestFlight.
+
+Build 5 has been uploaded successfully to App Store Connect and may still be processing before it becomes installable in TestFlight.
 
 ## Core gameplay
 
@@ -104,23 +106,67 @@ Build 4 changes:
 
 Build 4 was uploaded successfully to TestFlight through One More Floor bridge run 32581479782 with explicit build number 4. Private-source checkout, Godot export, Xcode archive, automatic/cloud signing and TestFlight upload all passed.
 
-### Build 4 physical-device checklist
+Physical-device visual feedback on Build 4: the atmosphere still reads too much like moving circles/glow geometry and is not considered final premium-quality artwork. A dedicated visual overhaul remains planned after the Build 5 IAP validation.
 
-Validate on iPhone before any IAP work continues:
+## Build 5 premium IAP milestone
 
-- app/menu launch
-- PLAY NOW enters game
-- first game tap starts the moving meter
-- second game tap stops the meter and produces a result
-- result tap advances to next round
-- pause tap pauses but never starts/stops a round
-- resume continues normally
-- restart run works
-- return to menu works
-- MIDNIGHT animated background looks good and is not just black
-- NEON/GOLD/AURORA previews show distinct animated background treatments
-- player-name editing still works
-- leaderboard/stats still work
+PR #5 was squash-merged as `cda0ae2290ecd12e08917d0fc71ee442ce00b905` after GitHub Actions run 32585228289 passed the complete premium release gate:
+
+- Godot 4.7.2 parse + main-scene smoke: PASS
+- live Supabase leaderboard endpoint: PASS
+- iOS Godot export + Xcode generic-device compile: PASS
+- `GodotIap.framework` presence/embed verification: PASS
+- Android Gradle debug APK export: PASS
+- Android APK native IAP/Billing payload verification: PASS
+
+Build 5 adds:
+
+- official OpenIAP / GodotIap 3.0.2 vendored into the project
+- StoreKit 2 purchase path on iOS
+- Google Play Billing integration path on Android
+- localized store prices in the Designs screen
+- permanent non-consumable theme purchases
+- Restore Purchases flow
+- entitlement refresh on store connection
+- local theme ownership cache rebuilt from store entitlements
+- purchase completion equips the newly unlocked theme
+- iOS deployment minimum 17.0 as required by the current plugin integration
+- Android Gradle export with minSdk 24
+
+Apple premium products are created and configured in App Store Connect:
+
+- `de.kamilunavo.ninenine.theme.neon` — Neon Pulse
+- `de.kamilunavo.ninenine.theme.gold` — Gold Rush
+- `de.kamilunavo.ninenine.theme.aurora` — Aurora
+
+Apple product configuration:
+
+- product type: non-consumable / permanent unlock
+- Germany base price: EUR 0.99 each
+- worldwide availability: configured
+- German metadata: configured
+- English metadata: configured
+
+The TestFlight bridge was hardened for IAP before distribution. Bridge run 32585489179 verified the framework in the generated Xcode project and again inside the release archive, then successfully uploaded `1.0.0 (5)` to App Store Connect/TestFlight.
+
+### Build 5 physical-device checklist
+
+Do not call paid themes production-ready until these are tested on a real iPhone through TestFlight:
+
+- app launches normally
+- PLAY / stop / result / next-round regression still works
+- pause / resume / restart / return-to-menu still works
+- Designs screen opens normally
+- store connects and real localized prices appear
+- Neon Pulse purchase opens Apple's sandbox/TestFlight purchase sheet
+- successful purchase unlocks and equips Neon Pulse
+- purchased theme remains available after app restart
+- Restore Purchases completes without error
+- restore rehydrates a previously owned premium theme after local ownership is cleared/reinstall scenario
+- canceling a purchase does not unlock a theme
+- leaderboard, stats and player-name editing still work
+
+One successful product purchase is enough to validate the general Apple purchase path. Additional products should at least be checked for correct localized price/product mapping; they do not all need to be purchased unless a mapping issue appears.
 
 ## Global leaderboard backend
 
@@ -173,23 +219,51 @@ Backend validation:
 - Build 1: physically validated baseline
 - Build 2: player-name input regression found
 - Build 3: player-name fix/UI/theme pass; gameplay-input regression found
-- Build 4: uploaded successfully; awaiting physical-device validation
+- Build 4: gameplay-input fix/background pass uploaded; background visual quality still rejected as final
+- Build 5: premium StoreKit 2 purchase/restore build uploaded successfully; physical IAP validation pending
 
 ## Monetization state
+
+Implemented / in TestFlight Build 5:
+
+- Apple StoreKit 2 integration through GodotIap/OpenIAP
+- Apple permanent paid-theme product catalog
+- localized store price display
+- purchase flow
+- restore flow
+- entitlement refresh / local ownership cache
+
+Implemented in code/build validation but not yet commercially configured on Google Play:
+
+- Google Play Billing native integration path
+- Android Billing payload packaged in the APK
 
 Still intentionally not live:
 
 - Ads / AdMob
 - Consent / ATT
 - Analytics
-- StoreKit / Google Play Billing
-- paid-theme entitlements
+- Google Play paid-theme product catalog
 - cloud saves
 
-Premium design product IDs reserved for the next pass after Build 4 device validation:
+Paid themes must remain cosmetic only; leaderboard/gameplay advantage must never depend on purchasing a theme.
 
-- `de.kamilunavo.ninenine.theme.neon`
-- `de.kamilunavo.ninenine.theme.gold`
-- `de.kamilunavo.ninenine.theme.aurora`
+## Planned next passes
 
-Target product type: non-consumable / permanent unlock. Restore/entitlement handling is required before paid themes can ship.
+### Visual premium overhaul
+
+Replace the current glow/circle-heavy atmosphere with clearly recognizable theme identities:
+
+- MIDNIGHT — deep starfield / constellation / orbital-night scene rather than generic circles
+- NEON PULSE — synthwave/cyber horizon, perspective lanes and controlled neon motion
+- GOLD RUSH — dark obsidian architecture, metallic gold shards/veins and premium light sweeps
+- AURORA — layered polar-light curtains with depth and atmospheric stars
+
+Do not upload the visual-overhaul build to TestFlight until Build 5 purchase/restore regression is physically checked.
+
+### Retention / social candidates
+
+1. Daily Perfect — one globally identical seeded challenge per day, exactly three attempts, daily ranking.
+2. Challenges / Duels — share a result challenge; recipient gets the same meter-speed setup and a limited number of attempts to beat it.
+
+Both features must preserve the core one-tap game and remain skill-based rather than pay-to-win.
