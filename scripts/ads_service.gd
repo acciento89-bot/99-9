@@ -3,6 +3,7 @@ extends Node
 signal ads_state_changed(ready: bool, message: String)
 signal interstitial_state_changed(ready: bool)
 signal interstitial_closed
+signal privacy_options_changed(required: bool)
 signal ad_error(message: String)
 
 const TEST_INTERSTITIAL_ANDROID := "ca-app-pub-3940256099942544/1033173712"
@@ -11,15 +12,15 @@ const TEST_INTERSTITIAL_IOS := "ca-app-pub-3940256099942544/4411468910"
 var _started := false
 var _ads_ready := false
 var _interstitial_ad = null
-var _consent_update_listener = null
-var _consent_dismiss_listener = null
 var _initialization_listener = null
 var _load_callback = null
 var _full_screen_callback = null
+var _consent_information: ConsentInformation
 var _retry_timer: Timer
 
 
 func _ready() -> void:
+    _consent_information = UserMessagingPlatform.consent_information
     _retry_timer = Timer.new()
     _retry_timer.one_shot = true
     _retry_timer.wait_time = 20.0
@@ -48,6 +49,23 @@ func is_interstitial_ready() -> bool:
     return _interstitial_ad != null
 
 
+func is_privacy_options_required() -> bool:
+    if OS.get_name() not in ["iOS", "Android"] or _consent_information == null:
+        return false
+    return _consent_information.get_privacy_options_requirement_status() == ConsentInformation.PrivacyOptionsRequirementStatus.REQUIRED
+
+
+func show_privacy_options() -> void:
+    if OS.get_name() not in ["iOS", "Android"]:
+        return
+
+    UserMessagingPlatform.show_privacy_options_form(func(error: FormError) -> void:
+        if error != null:
+            ad_error.emit("PRIVACY OPTIONS · %s" % error.message)
+        privacy_options_changed.emit(is_privacy_options_required())
+    )
+
+
 func show_interstitial_if_ready() -> bool:
     if _interstitial_ad == null:
         if _ads_ready:
@@ -61,32 +79,35 @@ func show_interstitial_if_ready() -> bool:
 
 func _request_user_consent() -> void:
     var params := ConsentRequestParameters.new()
-    _consent_update_listener = OnConsentInfoUpdateListener.new()
-
-    _consent_update_listener.on_consent_info_update_success = func() -> void:
-        if ConsentInformation.is_consent_form_available():
-            _load_and_show_consent_form()
-        else:
+    _consent_information.update(
+        params,
+        func() -> void:
+            privacy_options_changed.emit(is_privacy_options_required())
+            if _consent_information.get_is_consent_form_available():
+                _load_and_show_consent_form()
+            else:
+                _initialize_mobile_ads(),
+        func(error: FormError) -> void:
+            # A transient UMP failure must not brick the game. The SDK may still
+            # have a previously stored consent state available on the device.
+            ad_error.emit("CONSENT UPDATE FAILED · %s" % error.message)
             _initialize_mobile_ads()
-
-    _consent_update_listener.on_consent_info_update_failure = func(error: FormError) -> void:
-        # A transient UMP failure must not brick the game. The SDK can still use
-        # any previously stored consent state. Production remains gated by the
-        # AdMob privacy-message configuration before live ad units are enabled.
-        ad_error.emit("CONSENT UPDATE FAILED · %s" % error.message)
-        _initialize_mobile_ads()
-
-    ConsentInformation.request_consent_info_update(params, _consent_update_listener)
+    )
 
 
 func _load_and_show_consent_form() -> void:
-    _consent_dismiss_listener = OnConsentFormDismissedListener.new()
-    _consent_dismiss_listener.on_consent_form_dismissed = func(error: FormError) -> void:
-        if error != null:
-            ad_error.emit("CONSENT FORM · %s" % error.message)
-        _initialize_mobile_ads()
-
-    ConsentForm.load_and_show_consent_form_if_required(_consent_dismiss_listener)
+    UserMessagingPlatform.load_consent_form(
+        func(form: ConsentForm) -> void:
+            form.show(func(error: FormError) -> void:
+                if error != null:
+                    ad_error.emit("CONSENT FORM · %s" % error.message)
+                privacy_options_changed.emit(is_privacy_options_required())
+                _initialize_mobile_ads()
+            ),
+        func(error: FormError) -> void:
+            ad_error.emit("CONSENT FORM LOAD FAILED · %s" % error.message)
+            _initialize_mobile_ads()
+    )
 
 
 func _initialize_mobile_ads() -> void:
