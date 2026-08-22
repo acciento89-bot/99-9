@@ -22,6 +22,24 @@ func _ready() -> void:
     ads_service.start_ads()
 
 
+func _build_settings_ui() -> void:
+    super._build_settings_ui()
+
+    var privacy_panel := _make_panel("soft")
+    _place(privacy_panel, Vector2(130, 1200), Vector2(820, 245), settings_layer)
+
+    var privacy_title := _make_label("AD PRIVACY", 31, HORIZONTAL_ALIGNMENT_LEFT)
+    _place(privacy_title, Vector2(45, 30), Vector2(360, 55), privacy_panel)
+
+    var privacy_desc := _make_muted_label("Review or change your advertising consent for this device.", 19, HORIZONTAL_ALIGNMENT_LEFT)
+    _place(privacy_desc, Vector2(45, 85), Vector2(500, 80), privacy_panel)
+    privacy_desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+
+    var privacy_button := _make_button("PRIVACY OPTIONS", Vector2(220, 82), 22, "secondary")
+    _place(privacy_button, Vector2(555, 82), Vector2(220, 82), privacy_panel)
+    privacy_button.pressed.connect(func() -> void: ads_service.show_privacy_options())
+
+
 func _stop_round() -> void:
     super._stop_round()
     rounds_since_interstitial += 1
