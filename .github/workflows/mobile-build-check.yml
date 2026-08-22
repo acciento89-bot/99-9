@@ -2,7 +2,7 @@ name: 99.9 Mobile Build Check
 
 on:
   push:
-    branches: [main, 'agent/**']
+    branches: [main, 'agent/**', 'feature/**']
   pull_request:
   workflow_dispatch:
 
@@ -23,8 +23,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl -L --fail --retry 3 -o godot.zip \
-            "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_linux.x86_64.zip"
+          curl -L --fail --retry 3 -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_linux.x86_64.zip"
           unzip -q godot.zip
           mv "Godot_v${GODOT_TAG}_linux.x86_64" godot
           chmod +x godot
@@ -56,43 +55,32 @@ jobs:
           text=open('scripts/leaderboard_service.gd', encoding='utf-8').read()
           url=re.search(r'const FUNCTION_URL := "([^"]+)"', text)
           key=re.search(r'const ANON_KEY := "([^"]+)"', text)
-          if not url or not key:
-              raise SystemExit('Leaderboard client configuration not found')
+          if not url or not key: raise SystemExit('Leaderboard client configuration not found')
           print('FUNCTION_URL='+shlex.quote(url.group(1)))
           print('ANON_KEY='+shlex.quote(key.group(1)))
           PY
           )"
-          curl --fail-with-body -sS \
-            -H "Authorization: Bearer $ANON_KEY" \
-            -H "apikey: $ANON_KEY" \
-            "$FUNCTION_URL?mode=hit&limit=1&player_id=00000000-0000-4000-8000-000000000002" \
-            -o leaderboard.json
+          curl --fail-with-body -sS -H "Authorization: Bearer $ANON_KEY" -H "apikey: $ANON_KEY" "$FUNCTION_URL?mode=hit&limit=1&player_id=00000000-0000-4000-8000-000000000002" -o leaderboard.json
           jq -e '.mode == "hit" and (.top | type == "array")' leaderboard.json >/dev/null
 
   ios-unsigned:
     runs-on: macos-26
-    timeout-minutes: 35
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v5
       - name: Install Godot and templates
         shell: bash
         run: |
           set -euo pipefail
-          curl -L --fail --retry 3 -o "$RUNNER_TEMP/godot.zip" \
-            "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_macos.universal.zip"
-          mkdir -p "$RUNNER_TEMP/godot"
-          unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP/godot"
-          GODOT="$RUNNER_TEMP/godot/Godot.app/Contents/MacOS/Godot"
-          echo "GODOT=$GODOT" >> "$GITHUB_ENV"
-          T="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"
-          mkdir -p "$T"
-          curl -L --fail --retry 3 -o "$RUNNER_TEMP/templates.tpz" \
-            "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_export_templates.tpz"
-          mkdir -p "$RUNNER_TEMP/templates"
-          unzip -q "$RUNNER_TEMP/templates.tpz" -d "$RUNNER_TEMP/templates"
+          curl -L --fail --retry 3 -o "$RUNNER_TEMP/godot.zip" "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_macos.universal.zip"
+          mkdir -p "$RUNNER_TEMP/godot" && unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP/godot"
+          GODOT="$RUNNER_TEMP/godot/Godot.app/Contents/MacOS/Godot"; echo "GODOT=$GODOT" >> "$GITHUB_ENV"
+          T="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"; mkdir -p "$T"
+          curl -L --fail --retry 3 -o "$RUNNER_TEMP/templates.tpz" "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_export_templates.tpz"
+          mkdir -p "$RUNNER_TEMP/templates" && unzip -q "$RUNNER_TEMP/templates.tpz" -d "$RUNNER_TEMP/templates"
           cp -R "$RUNNER_TEMP/templates/templates/." "$T/"
           test -f "$T/ios.zip"
-      - name: Import and export Xcode project
+      - name: Import, export and verify IAP Xcode project
         shell: bash
         run: |
           set -euo pipefail
@@ -100,6 +88,10 @@ jobs:
           mkdir -p build/ios
           "$GODOT" --headless --path . --export-release "iOS Playtest" build/ios/NineNine.zip
           test -d build/ios/NineNine.xcodeproj
+          test -d addons/godot-iap/bin/ios/GodotIap.framework
+          chmod +x addons/godot-iap/scripts/fix_ios_embed.sh
+          IOS_EXPORT_DIR="$PWD/build/ios" ./addons/godot-iap/scripts/fix_ios_embed.sh
+          grep -q 'GodotIap.framework' build/ios/NineNine.xcodeproj/project.pbxproj
           xcodebuild -project build/ios/NineNine.xcodeproj -list -json > "$RUNNER_TEMP/xcode.json"
           SCHEME=$(python3 - <<'PY2'
           import json, os
@@ -108,10 +100,7 @@ jobs:
           PY2
           )
           test -n "$SCHEME"
-          xcodebuild -project build/ios/NineNine.xcodeproj -scheme "$SCHEME" -configuration Debug \
-            -sdk iphoneos -destination 'generic/platform=iOS' \
-            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+          xcodebuild -project build/ios/NineNine.xcodeproj -scheme "$SCHEME" -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath "$RUNNER_TEMP/DerivedData" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
           ditto -c -k --sequesterRsrc build/ios/NineNine.xcodeproj build/ios/NineNine-Xcode.zip
       - uses: actions/upload-artifact@v4
         with:
@@ -122,7 +111,7 @@ jobs:
 
   android-debug:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-java@v4
@@ -138,33 +127,31 @@ jobs:
           sdkmanager 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
           mkdir -p "$HOME/.android"
           if [[ ! -f "$HOME/.android/debug.keystore" ]]; then
-            keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" -storepass android \
-              -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 \
-              -dname 'CN=Android Debug,O=Android,C=US'
+            keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Android Debug,O=Android,C=US'
           fi
-      - name: Install Godot and templates
+      - name: Install Godot, templates and Gradle build template
         shell: bash
         run: |
           set -euo pipefail
-          curl -L --fail --retry 3 -o godot.zip \
-            "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_linux.x86_64.zip"
+          curl -L --fail --retry 3 -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_linux.x86_64.zip"
           unzip -q godot.zip
           mv "Godot_v${GODOT_TAG}_linux.x86_64" godot
           chmod +x godot
-          T="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
-          mkdir -p "$T" templates
-          curl -L --fail --retry 3 -o templates.tpz \
-            "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_export_templates.tpz"
+          T="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"; mkdir -p "$T" templates
+          curl -L --fail --retry 3 -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_export_templates.tpz"
           unzip -q templates.tpz -d templates
           cp -R templates/templates/. "$T/"
           ./godot --headless --editor --path . --quit
-      - name: Export Android debug APK
+          ./godot --headless --path . --install-android-build-template
+          test -f android/build/build.gradle || test -f android/build/build.gradle.kts
+      - name: Export Android debug APK with Billing plugin
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p build/android
           ./godot --headless --path . --export-debug "Android Playtest" build/android/99-9.apk
           test -s build/android/99-9.apk
+          unzip -l build/android/99-9.apk | grep -Ei 'GodotIap|billing' >/dev/null || { echo 'IAP/Billing payload missing from APK'; exit 1; }
       - uses: actions/upload-artifact@v4
         with:
           name: 99-9-android-debug
