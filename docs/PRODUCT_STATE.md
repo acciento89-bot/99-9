@@ -60,8 +60,34 @@ TestFlight bridge run 32577023811 completed successfully:
 
 The upload of v1.0.0 (1) was accepted successfully by Apple's upload tooling.
 
-Two immediate App Store Connect API checks after the successful upload did not list Build 1 yet (`NOT_VISIBLE_YET`). This means the upload has completed but Apple's server-side processing/listing has not yet surfaced the build in the Builds API at the time of the checkpoint.
+## Physical device validation
 
-No second upload should be started while Build 1 is still being processed, to avoid an unnecessary build-number bump or duplicate-release attempt.
+Build 1 was installed and tested on a real iPhone through TestFlight on 2026-08-22.
 
-The next milestone is physical-device gameplay validation of Build 1 in TestFlight. Monetization work stays intentionally blocked until that playtest passes.
+Validated on-device:
+
+- App launches normally: PASS
+- Portrait layout renders correctly: PASS
+- Tap to start: PASS
+- Tap to stop: PASS
+- Result screen: PASS
+- 99.900%+ streak threshold: PASS
+- Streak increments correctly: PASS
+- Next-round flow: PASS
+- Local best score persistence/display: PASS
+
+Observed test results included 99.929% and a near-perfect best of 99.993%, confirming the precision loop is playable and the target window is reachable on real hardware.
+
+Physical-device gameplay validation for v1.0.0 (1): PASS.
+
+## Next milestone
+
+Move into a dedicated game-feel/polish pass before monetization:
+
+- haptic feedback
+- sound feedback
+- stronger near-miss/perfect-hit presentation
+- subtle motion/juice improvements
+- UI/performance cleanup
+
+Ads, consent, analytics, leaderboards and other monetization-related work remain intentionally out of the validated Build 1 baseline until the polish pass is reviewed.
