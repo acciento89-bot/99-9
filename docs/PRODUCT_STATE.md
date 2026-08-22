@@ -2,7 +2,7 @@
 
 ## Current target
 
-v1.0.0 Build 3 physical-device playtest.
+v1.0.0 Build 4 physical-device regression test.
 
 ## Core gameplay
 
@@ -16,30 +16,24 @@ v1.0.0 Build 3 physical-device playtest.
 
 ## Build 1 baseline
 
-GitHub Actions run 32576070461 passed:
-
-- Godot 4.7.2 project parse + main-scene smoke test: PASS
-- iOS Godot export + unsigned Xcode generic-device compile on macOS 26: PASS
-- Android debug APK export: PASS
+GitHub Actions run 32576070461 passed Godot parse/smoke, iOS/Xcode compile and Android APK export.
 
 Build 1 was uploaded through the One More Floor TestFlight bridge and physically validated on a real iPhone on 2026-08-22.
 
 Validated on-device:
 
-- App launch: PASS
-- Portrait layout: PASS
-- Tap to start / stop: PASS
-- Result screen: PASS
+- app launch: PASS
+- portrait layout: PASS
+- tap to start / stop: PASS
+- result screen: PASS
 - 99.900%+ streak threshold: PASS
-- Streak increment: PASS
-- Next-round flow: PASS
-- Local best persistence/display: PASS
+- streak increment: PASS
+- next-round flow: PASS
+- local best persistence/display: PASS
 
 Observed results included 99.929% and a near-perfect 99.993%.
 
 ## Build 2 feature milestone
-
-PR #2 was squash-merged to main after GitHub Actions run 32578200206 passed all platform gates.
 
 Build 2 added:
 
@@ -52,49 +46,85 @@ Build 2 added:
 - Supabase cross-platform leaderboard client
 - Android internet permission
 
-Physical-device review of Build 2 confirmed the new menu/stats/leaderboard screens render and navigate, but exposed one real iOS usability regression:
-
-- Player-name LineEdit is visible but tapping it does not enter editable/focused keyboard state: FAIL
-
-The Build 2 menu was also judged functional but too prototype-like, so monetization stayed blocked pending a UI polish pass.
+Physical-device review found the iOS player-name field visible but not editable/focusable. The menu was also considered too prototype-like.
 
 ## Build 3 UI / customization milestone
 
-PR #3 was squash-merged to main as commit `dfe18657c2e6ae863366bdf00bcfd55ef83cd354` after GitHub Actions run 32580003697 passed all four gates:
+PR #3 was squash-merged as `dfe18657c2e6ae863366bdf00bcfd55ef83cd354` after GitHub Actions run 32580003697 passed:
 
 - Godot 4.7.2 parse + main-scene smoke: PASS
 - live Supabase leaderboard endpoint: PASS
 - iOS Godot export + Xcode generic-device compile: PASS
 - Android debug APK export: PASS
 
-Build 3 replaces the procedural UI controller with `scripts/main_v3.gd` and adds:
+Build 3 added:
 
-- redesigned main menu with clearer visual hierarchy and a dedicated personal-record card
+- redesigned main menu with clearer hierarchy and personal-record card
 - redesigned settings, stats, leaderboard and pause surfaces
-- explicit mobile player-name input hardening:
-  - `editable=true`
-  - `focus_mode=FOCUS_ALL`
-  - `mouse_filter=STOP`
-  - `virtual_keyboard_enabled=true`
-  - select-all-on-focus
-  - caret blink
-  - explicit touch GUI handler calling `grab_focus()`
-  - visible focused border/caret styling
-  - submit-on-keyboard action plus Save Player Name button
+- hardened mobile player-name input with editable/focus/touch/virtual-keyboard handling
 - Designs screen
-- persistent theme selection and ownership structure
 - free MIDNIGHT design
-- premium preview designs:
-  - NEON PULSE
-  - GOLD RUSH
-  - AURORA
-- premium designs can be previewed across the app but cannot be equipped unless owned
-- premium purchase UI is intentionally locked until StoreKit/Google Play Billing wiring is added
-- themes recolor app background, glow, cards, buttons, input field and gameplay meter
+- premium preview designs: NEON PULSE, GOLD RUSH, AURORA
+- persistent theme selection / ownership shell
+
+Build 3 physical-device findings:
+
+- redesigned menu/settings/theme surfaces render: PASS
+- player-name field opens keyboard and can be edited/saved: PASS
+- premium theme preview flow works visually: PASS
+- core PLAY flow regression discovered: after entering the game, gameplay taps could be swallowed by the full-screen UI Control before reaching `_unhandled_input`: FAIL
+- flat/dark background still felt too empty and was rejected for final polish
+
+This blocked StoreKit/paid-theme wiring until core gameplay was restored.
+
+## Build 4 gameplay-input + background milestone
+
+PR #4 was squash-merged as `b35be682c765b7e559e5a8f6ffd84c51b3e80c12` after GitHub Actions run 32581337356 passed all release gates:
+
+- Godot 4.7.2 parse + main-scene smoke: PASS
+- live Supabase leaderboard endpoint: PASS
+- iOS Godot export + Xcode generic-device compile: PASS
+- Android debug APK export: PASS
+
+A first CI attempt correctly failed on a GDScript float-inference parser error in the new atmosphere renderer. The variable was explicitly typed and the complete gate was rerun green before merge.
+
+Build 4 changes:
+
+- new `scripts/main_v4.gd` inherits the validated Build 3 controller
+- gameplay taps moved from `_unhandled_input` to the gameplay Control's direct `gui_input`
+- explicit pause-button touch guard prevents pause taps from counting as gameplay taps
+- PLAY -> READY -> RUNNING -> RESULT -> NEXT ROUND remains the existing game-state flow
+- flat black backdrop replaced with animated theme-aware atmosphere
+- shared moving glow clouds, color wash and subtle dust/stars
+- MIDNIGHT: orbital rings / night-sky treatment
+- NEON PULSE: drifting neon grid
+- GOLD RUSH: animated gold light rays
+- AURORA: animated flowing ribbons
+- game background is subdued relative to menu backgrounds so the precision meter stays readable
+
+Build 4 was uploaded successfully to TestFlight through One More Floor bridge run 32581479782 with explicit build number 4. Private-source checkout, Godot export, Xcode archive, automatic/cloud signing and TestFlight upload all passed.
+
+### Build 4 physical-device checklist
+
+Validate on iPhone before any IAP work continues:
+
+- app/menu launch
+- PLAY NOW enters game
+- first game tap starts the moving meter
+- second game tap stops the meter and produces a result
+- result tap advances to next round
+- pause tap pauses but never starts/stops a round
+- resume continues normally
+- restart run works
+- return to menu works
+- MIDNIGHT animated background looks good and is not just black
+- NEON/GOLD/AURORA previews show distinct animated background treatments
+- player-name editing still works
+- leaderboard/stats still work
 
 ## Global leaderboard backend
 
-Supabase project `bqctetqraszsvknczjjr` hosts isolated 99.9% resources using the `ninenine_*` namespace.
+Supabase project `bqctetqraszsvknczjjr` hosts isolated 99.9% resources under `ninenine_*`.
 
 Created:
 
@@ -125,7 +155,7 @@ Global ranking modes:
 
 The leaderboard is shared across iOS and Android.
 
-Validation:
+Backend validation:
 
 - transactional database smoke: PASS
 - player-name RPC write: PASS
@@ -140,11 +170,10 @@ Validation:
 - Bundle ID: de.kamilunavo.ninenine
 - Apple internal App ID name: Nine Nine
 - App Store version: 1.0.0
-- Build 1: physically validated
-- Build 2: physically reviewed; player-name input regression found
-- Build 3: uploaded successfully through One More Floor TestFlight bridge run 32580145642
-
-Build 3 passed private-source checkout, requested build-number resolution to 3, Godot 4.7.2 iOS export, Xcode release archive, Apple automatic/cloud signing and TestFlight upload.
+- Build 1: physically validated baseline
+- Build 2: player-name input regression found
+- Build 3: player-name fix/UI/theme pass; gameplay-input regression found
+- Build 4: uploaded successfully; awaiting physical-device validation
 
 ## Monetization state
 
@@ -157,25 +186,10 @@ Still intentionally not live:
 - paid-theme entitlements
 - cloud saves
 
-The visual/ownership shell for paid designs now exists. Premium themes must use platform IAP before they can be sold or permanently equipped.
+Premium design product IDs reserved for the next pass after Build 4 device validation:
 
-## Build 3 physical-device checklist
+- `de.kamilunavo.ninenine.theme.neon`
+- `de.kamilunavo.ninenine.theme.gold`
+- `de.kamilunavo.ninenine.theme.aurora`
 
-When Build 3 appears in TestFlight, validate on iPhone:
-
-- redesigned main menu renders correctly
-- PLAY / WORLD RANKING / MY STATS / DESIGNS / SETTINGS navigation
-- tap Player Name field -> keyboard opens and field becomes editable
-- type a different name and save it
-- saved name persists after leaving/reopening settings
-- saved name appears in stats and global ranking after score sync
-- MIDNIGHT equips normally
-- NEON PULSE preview changes the app look
-- GOLD RUSH preview changes the app look
-- AURORA preview changes the app look
-- leaving Designs reverts locked preview to the owned/equipped theme
-- premium themes cannot be permanently equipped yet
-- pause/resume/restart/gameplay still work
-- no UI tap accidentally triggers gameplay
-
-Only after this device pass should StoreKit/Google Play Billing products for premium designs be wired.
+Target product type: non-consumable / permanent unlock. Restore/entitlement handling is required before paid themes can ship.
