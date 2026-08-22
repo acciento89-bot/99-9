@@ -22,6 +22,7 @@ var store_ready := false
 var products: Dictionary = {}
 var prices: Dictionary = {}
 var _started := false
+var _catalog_loaded := false
 
 func start_store() -> void:
     if _started:
@@ -32,12 +33,23 @@ func start_store() -> void:
         store_state_changed.emit(false, "Store available on iOS / Android device")
         return
 
-    iap = GodotIapWrapperScript.new()
-    iap.name = "GodotIapWrapper"
-    add_child(iap)
-    iap.purchase_updated.connect(_on_purchase_updated)
-    iap.purchase_error.connect(_on_purchase_error)
-    iap.products_fetched.connect(_on_products_fetched)
+    # GodotIap's editor plugin installs /root/GodotIapPlugin as an autoload.
+    # Reusing that singleton is important: godot_iap.gd guards initialization
+    # with a static flag, so creating a second wrapper can leave the duplicate
+    # instance without its native StoreKit / Play Billing plugin.
+    iap = get_node_or_null("/root/GodotIapPlugin")
+    if iap == null:
+        # Defensive fallback for exports where the editor autoload was not
+        # persisted. Wait until the wrapper has completed _ready() before using it.
+        iap = GodotIapWrapperScript.new()
+        iap.name = "GodotIapFallback"
+        add_child(iap)
+        if not iap.is_node_ready():
+            await iap.ready
+    elif not iap.is_node_ready():
+        await iap.ready
+
+    _connect_iap_signals()
 
     store_state_changed.emit(false, "Connecting to store...")
     var connected = await iap.init_connection()
@@ -46,27 +58,55 @@ func start_store() -> void:
         store_state_changed.emit(false, "Store connection unavailable")
         return
 
-    store_state_changed.emit(true, "Store connected")
+    store_state_changed.emit(true, "Store connected · loading products")
     await _fetch_products()
+
+    if prices.is_empty():
+        store_state_changed.emit(true, "Store connected · products unavailable")
+    else:
+        store_state_changed.emit(true, "Store ready · %d premium products" % prices.size())
+
     await refresh_entitlements()
+
+func _connect_iap_signals() -> void:
+    if iap == null:
+        return
+    if not iap.purchase_updated.is_connected(_on_purchase_updated):
+        iap.purchase_updated.connect(_on_purchase_updated)
+    if not iap.purchase_error.is_connected(_on_purchase_error):
+        iap.purchase_error.connect(_on_purchase_error)
+    if not iap.products_fetched.is_connected(_on_products_fetched):
+        iap.products_fetched.connect(_on_products_fetched)
 
 func _fetch_products() -> void:
     if not store_ready or iap == null:
         return
+
+    _catalog_loaded = false
+    products.clear()
+    prices.clear()
+
     var request = Types.ProductRequest.new()
     var sku_list: Array[String] = []
     for sku in PRODUCT_BY_THEME.values():
         sku_list.append(str(sku))
     request.skus = sku_list
     request.type = Types.ProductQueryType.IN_APP
+
     var fetched = await iap.fetch_products(request)
     if fetched is Array and not fetched.is_empty():
         _consume_products(fetched)
+    else:
+        _catalog_loaded = true
+        products_updated.emit(prices.duplicate())
 
 func _on_products_fetched(result: Dictionary) -> void:
     var fetched = result.get("products", [])
     if fetched is Array and not fetched.is_empty():
         _consume_products(fetched)
+    elif not _catalog_loaded:
+        _catalog_loaded = true
+        products_updated.emit(prices.duplicate())
 
 func _consume_products(fetched: Array) -> void:
     for product in fetched:
@@ -80,6 +120,8 @@ func _consume_products(fetched: Array) -> void:
         var display_price := _field_string(product, ["display_price", "displayPrice", "localizedPrice"])
         if not display_price.is_empty():
             prices[theme_id] = display_price
+
+    _catalog_loaded = true
     products_updated.emit(prices.duplicate())
 
 func purchase_theme(theme_id: String) -> void:
