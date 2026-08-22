@@ -63,10 +63,19 @@ func show_privacy_options() -> void:
         if error != null:
             ad_error.emit("PRIVACY OPTIONS · %s" % error.message)
         privacy_options_changed.emit(is_privacy_options_required())
+        if _consent_allows_ads():
+            if not _ads_ready:
+                _initialize_mobile_ads()
+        else:
+            _disable_ads_for_privacy("ADS DISABLED · CONSENT REQUIRED")
     )
 
 
 func show_interstitial_if_ready() -> bool:
+    if not _consent_allows_ads():
+        _disable_ads_for_privacy("ADS DISABLED · CONSENT REQUIRED")
+        return false
+
     if _interstitial_ad == null:
         if _ads_ready:
             _load_interstitial()
@@ -83,15 +92,15 @@ func _request_user_consent() -> void:
         params,
         func() -> void:
             privacy_options_changed.emit(is_privacy_options_required())
-            if _consent_information.get_is_consent_form_available():
+            if _consent_allows_ads():
+                _initialize_mobile_ads()
+            elif _consent_information.get_is_consent_form_available():
                 _load_and_show_consent_form()
             else:
-                _initialize_mobile_ads(),
+                _disable_ads_for_privacy("ADS DISABLED · CONSENT REQUIRED"),
         func(error: FormError) -> void:
-            # A transient UMP failure must not brick the game. The SDK may still
-            # have a previously stored consent state available on the device.
             ad_error.emit("CONSENT UPDATE FAILED · %s" % error.message)
-            _initialize_mobile_ads()
+            _disable_ads_for_privacy("ADS DISABLED · CONSENT UNAVAILABLE")
     )
 
 
@@ -102,16 +111,37 @@ func _load_and_show_consent_form() -> void:
                 if error != null:
                     ad_error.emit("CONSENT FORM · %s" % error.message)
                 privacy_options_changed.emit(is_privacy_options_required())
-                _initialize_mobile_ads()
+                if _consent_allows_ads():
+                    _initialize_mobile_ads()
+                else:
+                    _disable_ads_for_privacy("ADS DISABLED · CONSENT REQUIRED")
             ),
         func(error: FormError) -> void:
             ad_error.emit("CONSENT FORM LOAD FAILED · %s" % error.message)
-            _initialize_mobile_ads()
+            _disable_ads_for_privacy("ADS DISABLED · CONSENT UNAVAILABLE")
     )
 
 
+func _consent_allows_ads() -> bool:
+    if _consent_information == null:
+        return false
+    var status := _consent_information.get_consent_status()
+    return status == ConsentInformation.ConsentStatus.NOT_REQUIRED or status == ConsentInformation.ConsentStatus.OBTAINED
+
+
+func _disable_ads_for_privacy(message: String) -> void:
+    _ads_ready = false
+    if _retry_timer != null and not _retry_timer.is_stopped():
+        _retry_timer.stop()
+    if _interstitial_ad != null:
+        _interstitial_ad.destroy()
+        _interstitial_ad = null
+    interstitial_state_changed.emit(false)
+    ads_state_changed.emit(false, message)
+
+
 func _initialize_mobile_ads() -> void:
-    if _ads_ready:
+    if _ads_ready or not _consent_allows_ads():
         return
 
     ads_state_changed.emit(false, "INITIALIZING TEST ADS")
@@ -120,6 +150,9 @@ func _initialize_mobile_ads() -> void:
 
     _initialization_listener = OnInitializationCompleteListener.new()
     _initialization_listener.on_initialization_complete = func(_status: InitializationStatus) -> void:
+        if not _consent_allows_ads():
+            _disable_ads_for_privacy("ADS DISABLED · CONSENT REQUIRED")
+            return
         _ads_ready = true
         ads_state_changed.emit(true, "TEST ADS READY")
         _load_interstitial()
@@ -128,7 +161,7 @@ func _initialize_mobile_ads() -> void:
 
 
 func _load_interstitial() -> void:
-    if not _ads_ready or _interstitial_ad != null:
+    if not _ads_ready or not _consent_allows_ads() or _interstitial_ad != null:
         return
 
     var unit_id := TEST_INTERSTITIAL_ANDROID if OS.get_name() == "Android" else TEST_INTERSTITIAL_IOS
@@ -138,10 +171,14 @@ func _load_interstitial() -> void:
         _interstitial_ad = null
         interstitial_state_changed.emit(false)
         ad_error.emit("INTERSTITIAL LOAD FAILED · %s" % error.message)
-        if _retry_timer.is_stopped():
+        if _ads_ready and _consent_allows_ads() and _retry_timer.is_stopped():
             _retry_timer.start()
 
     _load_callback.on_ad_loaded = func(ad: InterstitialAd) -> void:
+        if not _consent_allows_ads():
+            ad.destroy()
+            _disable_ads_for_privacy("ADS DISABLED · CONSENT REQUIRED")
+            return
         _interstitial_ad = ad
         _attach_full_screen_callback()
         interstitial_state_changed.emit(true)
