@@ -1,7 +1,8 @@
-[gd_scene load_steps=3 format=3]
+[gd_scene load_steps=4 format=3]
 
-[ext_resource type="Script" path="res://scripts/main_v4.gd" id="1_main"]
+[ext_resource type="Script" path="res://scripts/main_v5.gd" id="1_main"]
 [ext_resource type="Script" path="res://scripts/leaderboard_service.gd" id="2_leaderboard"]
+[ext_resource type="Script" path="res://scripts/iap_service.gd" id="3_iap"]
 
 [node name="Main" type="Control"]
 layout_mode = 3
@@ -14,3 +15,6 @@ script = ExtResource("1_main")
 
 [node name="LeaderboardService" type="Node" parent="."]
 script = ExtResource("2_leaderboard")
+
+[node name="IapService" type="Node" parent="."]
+script = ExtResource("3_iap")

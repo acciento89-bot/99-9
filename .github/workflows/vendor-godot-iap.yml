@@ -1,0 +1,51 @@
+name: Vendor Godot IAP 3.0.2
+
+on:
+  push:
+    branches: ['feature/build5-premium-iap']
+    paths: ['.github/workflows/vendor-godot-iap.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  IAP_VERSION: '3.0.2'
+  IAP_TAG: 'godot-iap-3.0.2'
+
+jobs:
+  vendor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feature/build5-premium-iap
+      - name: Download official OpenIAP Godot release
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL="https://github.com/hyodotdev/openiap/releases/download/${IAP_TAG}/godot-iap-${IAP_VERSION}.zip"
+          curl -L --fail --retry 3 -o "$RUNNER_TEMP/godot-iap.zip" "$URL"
+          rm -rf "$RUNNER_TEMP/iap" addons/godot-iap
+          mkdir -p "$RUNNER_TEMP/iap" addons
+          unzip -q "$RUNNER_TEMP/godot-iap.zip" -d "$RUNNER_TEMP/iap"
+          SRC=$(find "$RUNNER_TEMP/iap" -type d -path '*/addons/godot-iap' -print -quit)
+          test -n "$SRC"
+          cp -R "$SRC" addons/godot-iap
+          test -f addons/godot-iap/plugin.cfg
+          test -f addons/godot-iap/types.gd
+          du -sh addons/godot-iap
+      - name: Commit vendored plugin
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add addons/godot-iap
+          if git diff --cached --quiet; then
+            echo 'Plugin already vendored.'
+            exit 0
+          fi
+          git commit -m 'Vendor godot-iap 3.0.2'
+          git push origin HEAD:feature/build5-premium-iap
