@@ -9,16 +9,28 @@ on:
 
 permissions:
   contents: write
+  statuses: write
 
 jobs:
   bootstrap:
     runs-on: ubuntu-latest
     steps:
+      - name: Publish pending status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          U="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          B=$(jq -n --arg u "$U" '{state:"pending",description:"Installing AdMob 5.0.0 for Godot 4.7.2",target_url:$u,context:"99-9/admob-bootstrap"}')
+          curl -fsSL -X POST -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" -d "$B" >/dev/null
+
       - uses: actions/checkout@v5
         with:
           ref: feature/build8-admob-test
 
       - name: Vendor editor addon and native Godot 4.7.2 templates
+        id: vendor
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -84,3 +96,20 @@ jobs:
           fi
           git commit -m 'Vendor AdMob native templates for Godot 4.7.2'
           git push origin HEAD:feature/build8-admob-test
+
+      - name: Publish final status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          U="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          if [[ "${{ steps.vendor.outcome }}" == success ]]; then
+            S=success; D='AdMob 5.0.0 editor + iOS + Android templates installed'
+          else
+            S=failure; D='AdMob bootstrap failed; inspect workflow log'
+          fi
+          B=$(jq -n --arg s "$S" --arg d "$D" --arg u "$U" '{state:$s,description:$d,target_url:$u,context:"99-9/admob-bootstrap"}')
+          curl -fsSL -X POST -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" -d "$B" >/dev/null
+          [[ "$S" == success ]]
