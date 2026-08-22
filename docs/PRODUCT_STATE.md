@@ -42,28 +42,26 @@ PR #1 was squash-merged after the green validation run.
 - App Store version: 1.0.0
 - Build: 1
 - Bundle ID registration: COMPLETE via One More Floor App Store Connect bridge
-- App Store Connect app record: NOT YET CREATED
+- App Store Connect app record: COMPLETE
 
-Apple requires the app record to exist before a TestFlight build can be uploaded. The supported App Store Connect API currently exposes app lookup/update but not creation of a new app record, so this one record must be created in the App Store Connect UI.
+## TestFlight
 
-## TestFlight bridge
+One More Floor hosts the TestFlight bridge and keeps the existing App Store Connect API signing secrets. `NINENINE_REPO_TOKEN` provides read-only access to the private `acciento89-bot/99-9` source.
 
-One More Floor contains `.github/workflows/99-9-testflight-bridge.yml` and keeps the existing App Store Connect API signing secrets. The bridge is prepared to:
+TestFlight bridge run 32577023811 completed successfully:
 
-1. Read the private `acciento89-bot/99-9` source.
-2. Build with Godot 4.7.2 on macOS 26.
-3. Export the iOS Xcode project.
-4. Archive for iPhone/iPad.
-5. Sign through Apple automatic/cloud signing using the existing ASC API key.
-6. Upload v1.0.0 (1) to TestFlight.
+1. Private 99-9 checkout: PASS
+2. App Store Connect app lookup: PASS
+3. Godot 4.7.2 macOS + iOS template setup: PASS
+4. Godot iOS Xcode export: PASS
+5. Xcode scheme resolution: PASS
+6. Release archive creation: PASS
+7. Apple automatic/cloud signing + TestFlight upload: PASS
 
-The bridge deliberately does not publish private 99-9 source or build artifacts in the public One More Floor repository.
+The upload of v1.0.0 (1) was accepted successfully by Apple's upload tooling.
 
-### Remaining release prerequisites
+Two immediate App Store Connect API checks after the successful upload did not list Build 1 yet (`NOT_VISIBLE_YET`). This means the upload has completed but Apple's server-side processing/listing has not yet surfaced the build in the Builds API at the time of the checkpoint.
 
-- Create the `99.9%` iOS app record in App Store Connect using bundle ID `de.kamilunavo.ninenine`.
-- Add `NINENINE_REPO_TOKEN` to the One More Floor Actions secrets. It should be a fine-grained GitHub token with read-only Contents access to only the private `99-9` repository.
+No second upload should be started while Build 1 is still being processed, to avoid an unnecessary build-number bump or duplicate-release attempt.
 
-The existing ASC secrets were probed from the private 99-9 repository and are not inherited there, so the cross-repository read token is the intended bridge rather than duplicating Apple credentials.
-
-The next milestone is the first real TestFlight upload and physical-device gameplay validation before monetization work begins.
+The next milestone is physical-device gameplay validation of Build 1 in TestFlight. Monetization work stays intentionally blocked until that playtest passes.
