@@ -16,9 +16,12 @@ env:
 jobs:
   godot-validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
+      - name: Install AdMob native templates for editor validation
+        shell: bash
+        run: bash scripts/ci_install_admob.sh all
       - name: Download Godot
         shell: bash
         run: |
@@ -64,13 +67,14 @@ jobs:
 
   ios-unsigned:
     runs-on: macos-26
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
-      - name: Install Godot and templates
+      - name: Install Godot, templates and AdMob iOS native package
         shell: bash
         run: |
           set -euo pipefail
+          bash scripts/ci_install_admob.sh ios
           curl -L --fail --retry 3 -o "$RUNNER_TEMP/godot.zip" "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_macos.universal.zip"
           mkdir -p "$RUNNER_TEMP/godot" && unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP/godot"
           GODOT="$RUNNER_TEMP/godot/Godot.app/Contents/MacOS/Godot"; echo "GODOT=$GODOT" >> "$GITHUB_ENV"
@@ -79,7 +83,8 @@ jobs:
           mkdir -p "$RUNNER_TEMP/templates" && unzip -q "$RUNNER_TEMP/templates.tpz" -d "$RUNNER_TEMP/templates"
           cp -R "$RUNNER_TEMP/templates/templates/." "$T/"
           test -f "$T/ios.zip"
-      - name: Import, export and verify IAP Xcode project
+          test -f addons/admob/ios/bin/ads/poing_godot_admob_ads.gd
+      - name: Import, export and verify IAP + AdMob Xcode project
         shell: bash
         run: |
           set -euo pipefail
@@ -91,6 +96,8 @@ jobs:
           chmod +x addons/godot-iap/scripts/fix_ios_embed.sh
           IOS_EXPORT_DIR="$PWD/build/ios" ./addons/godot-iap/scripts/fix_ios_embed.sh
           grep -q 'GodotIap.framework' build/ios/NineNine.xcodeproj/project.pbxproj
+          grep -R -q 'ca-app-pub-3940256099942544~1458002511' build/ios || { echo 'AdMob iOS demo App ID missing from export'; exit 1; }
+          grep -R -q 'GoogleMobileAds' build/ios || { echo 'Google Mobile Ads SPM integration missing'; exit 1; }
           xcodebuild -project build/ios/NineNine.xcodeproj -list -json > "$RUNNER_TEMP/xcode.json"
           SCHEME=$(python3 - <<'PY2'
           import json, os
@@ -110,7 +117,7 @@ jobs:
 
   android-debug:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-java@v4
@@ -128,10 +135,11 @@ jobs:
           if [[ ! -f "$HOME/.android/debug.keystore" ]]; then
             keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Android Debug,O=Android,C=US'
           fi
-      - name: Install Godot, templates and deterministic Gradle build template
+      - name: Install Godot, templates, Gradle template and AdMob Android package
         shell: bash
         run: |
           set -euo pipefail
+          bash scripts/ci_install_admob.sh android
           curl -L --fail --retry 3 -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_linux.x86_64.zip"
           unzip -q godot.zip
           mv "Godot_v${GODOT_TAG}_linux.x86_64" godot
@@ -141,6 +149,7 @@ jobs:
           unzip -q templates.tpz -d templates
           cp -R templates/templates/. "$T/"
           test -f "$T/android_source.zip"
+          test -f addons/admob/android/bin/ads/poing_godot_admob_ads.gd
           ./godot --headless --editor --path . --quit
           rm -rf android/build
           mkdir -p android/build
@@ -150,7 +159,7 @@ jobs:
           test -f android/build/build.gradle || test -f android/build/build.gradle.kts
           test -f android/build/gradlew
           chmod +x android/build/gradlew
-      - name: Export Android debug APK with Billing plugin
+      - name: Export Android debug APK with Billing + AdMob
         shell: bash
         run: |
           set -euo pipefail
@@ -158,6 +167,8 @@ jobs:
           ./godot --headless --path . --export-debug "Android Playtest" build/android/99-9.apk
           test -s build/android/99-9.apk
           unzip -l build/android/99-9.apk | grep -Ei 'GodotIap|billing' >/dev/null || { echo 'IAP/Billing payload missing from APK'; exit 1; }
+          unzip -p build/android/99-9.apk AndroidManifest.xml | strings | grep -F 'ca-app-pub-3940256099942544~3347511713' >/dev/null || { echo 'AdMob Android demo App ID missing from manifest'; exit 1; }
+          unzip -p build/android/99-9.apk 'classes*.dex' | strings | grep -Em1 'com/google/android/gms/ads|MobileAds' >/dev/null || { echo 'Google Mobile Ads classes missing from APK'; exit 1; }
       - uses: actions/upload-artifact@v4
         with:
           name: 99-9-android-debug
