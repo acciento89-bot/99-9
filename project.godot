@@ -19,7 +19,7 @@ general/android/app_id="ca-app-pub-3940256099942544~3347511713"
 general/android/disable_initialization_optimization=false
 general/android/disable_ad_loading_optimization=false
 general/ios/enabled=true
-general/ios/app_id="ca-app-pub-3940256099942544~1458002511"
+general/ios/app_id="ca-app-pub-8944085355624754~5700066119"
 
 [display]
 
