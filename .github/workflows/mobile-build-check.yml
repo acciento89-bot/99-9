@@ -34,7 +34,7 @@ jobs:
           unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP"
           chmod +x "$RUNNER_TEMP/Godot_v${GODOT_TAG}_linux.x86_64"
 
-      - name: Capture real Build 16 UI at 2048x2732
+      - name: Capture real Build 16 UI and fit to 2048x2732
         shell: bash
         run: |
           set -euo pipefail
@@ -43,7 +43,6 @@ jobs:
           xvfb-run -a -s '-screen 0 2048x2732x24' "$GODOT" \
             --path . \
             --write-movie "$RUNNER_TEMP/movie/99-9-ipad.png" \
-            --resolution 2048x2732 \
             --fixed-fps 30 \
             --quit-after 5 \
             --rendering-method gl_compatibility \
@@ -56,11 +55,16 @@ jobs:
           import os
           p=os.environ['SCREENSHOT']
           im=Image.open(p).convert('RGB')
-          if im.size != (2048,2732):
-              raise SystemExit('Wrong screenshot size: '+str(im.size))
           if max(ImageStat.Stat(im).mean) < 1.0:
               raise SystemExit('Captured movie frame is blank')
-          print('REAL BUILD 16 IPAD FRAME READY',im.size,os.path.getsize(p))
+          tw,th=2048,2732
+          scale=min(tw/im.width,th/im.height)
+          nw,nh=round(im.width*scale),round(im.height*scale)
+          im=im.resize((nw,nh),Image.Resampling.LANCZOS)
+          canvas=Image.new('RGB',(tw,th),(0,0,0))
+          canvas.paste(im,((tw-nw)//2,(th-nh)//2))
+          canvas.save(p,'PNG',optimize=True)
+          print('REAL BUILD 16 IPAD SCREENSHOT READY',(tw,th),os.path.getsize(p))
           PY
           echo "SCREENSHOT=$SCREENSHOT" >> "$GITHUB_ENV"
 
@@ -71,7 +75,6 @@ jobs:
           python3 - <<'PY'
           import os,time,base64,json
           import jwt,requests
-
           BASE='https://api.appstoreconnect.apple.com/v1'
           BUNDLE='de.kamilunavo.ninenine'; BUILD='16'
           SHOT=os.environ['SCREENSHOT']; DISPLAY='APP_IPAD_PRO_3GEN_129'
@@ -81,7 +84,6 @@ jobs:
           KW_EN='game,precision,reaction,percent,highscore,leaderboard,streak,casual,one tap'
           KW_DE='spiel,präzision,reaktion,prozent,highscore,bestenliste,streak,casual,one tap'
           NOTES='99.9% is a one-tap precision game and does not require an account or login.\n\nReview path:\n1. Tap PLAY.\n2. Tap once to start the percentage run and tap again to stop it.\n3. Reaching 99.900% or higher continues the streak.\n4. WORLD LEADERBOARD shows best-hit and longest-streak rankings using a locally generated player ID and a user-selected display name.\n5. SETTINGS contains player-name settings plus purchase and restore options.\n\nOptional StoreKit in-app purchases unlock visual themes and Remove Ads. Google Mobile Ads/UMP is used for advertising and consent. No external payment method is used.'
-
           kid=os.environ['ASC_KEY_ID']; issuer=os.environ['ASC_ISSUER_ID']; raw=os.environ['ASC_PRIVATE_KEY_B64']
           key=base64.b64decode(raw).decode(); now=int(time.time())
           tok=jwt.encode({'iss':issuer,'iat':now,'exp':now+1100,'aud':'appstoreconnect-v1'},key,algorithm='ES256',headers={'kid':kid,'typ':'JWT'})
@@ -99,13 +101,12 @@ jobs:
           if len(apps)!=1: raise RuntimeError('app lookup failed')
           app_id=apps[0]['id']
           api('PATCH',f'/apps/{app_id}',body={'data':{'type':'apps','id':app_id,'attributes':{'contentRightsDeclaration':'USES_THIRD_PARTY_CONTENT'}}})
-
           vv=api('GET',f'/apps/{app_id}/appStoreVersions',{'filter[platform]':'IOS','limit':'50','fields[appStoreVersions]':'versionString,appVersionState'})['data']
           vv=[v for v in vv if v.get('attributes',{}).get('versionString') in ('1.0','1.0.0')]
           if not vv: raise RuntimeError('version 1.0 missing')
           editable={'PREPARE_FOR_SUBMISSION','READY_FOR_REVIEW','DEVELOPER_REJECTED','METADATA_REJECTED','REJECTED'}
-          ver=next((v for v in vv if v.get('attributes',{}).get('appVersionState') in editable),vv[0])
-          vid=ver['id']; print('VERSION',vid,ver.get('attributes',{}).get('appVersionState'))
+          ver=next((v for v in vv if v.get('attributes',{}).get('appVersionState') in editable),vv[0]); vid=ver['id']
+          print('VERSION',vid,ver.get('attributes',{}).get('appVersionState'))
           api('PATCH',f'/appStoreVersions/{vid}',body={'data':{'type':'appStoreVersions','id':vid,'attributes':{'copyright':COPYRIGHT}}})
 
           locs=api('GET',f'/appStoreVersions/{vid}/appStoreVersionLocalizations',{'limit':'50','fields[appStoreVersionLocalizations]':'locale,description,keywords,supportUrl'})['data']
@@ -161,11 +162,9 @@ jobs:
           current=api('GET',f'/appStoreVersions/{vid}')['data'].get('attributes',{}).get('appVersionState')
           if current in ('WAITING_FOR_REVIEW','IN_REVIEW'):
               print('FINAL SUCCESS',current); raise SystemExit(0)
-
           subs=api('GET',f'/apps/{app_id}/reviewSubmissions',{'limit':'100','fields[reviewSubmissions]':'platform,state'})['data']
           ready=[s for s in subs if s.get('attributes',{}).get('state')=='READY_FOR_REVIEW']
-          sub=ready[0] if ready else api('POST','/reviewSubmissions',body={'data':{'type':'reviewSubmissions','attributes':{'platform':'IOS'},'relationships':{'app':{'data':{'type':'apps','id':app_id}}}}})['data']
-          rsid=sub['id']
+          sub=ready[0] if ready else api('POST','/reviewSubmissions',body={'data':{'type':'reviewSubmissions','attributes':{'platform':'IOS'},'relationships':{'app':{'data':{'type':'apps','id':app_id}}}}})['data']; rsid=sub['id']
           items=api('GET',f'/reviewSubmissions/{rsid}/items',{'limit':'200','include':'appStoreVersion','fields[reviewSubmissionItems]':'state,appStoreVersion','fields[appStoreVersions]':'versionString'})['data']
           linked=any(((x.get('relationships',{}).get('appStoreVersion',{}).get('data') or {}).get('id')==vid) for x in items)
           if not linked:
