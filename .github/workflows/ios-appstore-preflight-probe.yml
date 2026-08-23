@@ -1,0 +1,94 @@
+name: 99.9 App Store Preflight Probe
+
+on:
+  push:
+    branches:
+      - ios/storekit-connection-fix
+    paths:
+      - '.github/workflows/ios-appstore-preflight-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  BUNDLE_ID: de.kamilunavo.ninenine
+  BUILD_NUMBER: '16'
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ios/storekit-connection-fix
+      - run: python3 -m pip install --quiet pyjwt cryptography requests
+      - name: Probe ASC release readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p validation
+          python3 - <<'PY'
+          import os,time,base64
+          from decimal import Decimal
+          import jwt,requests
+          BASE='https://api.appstoreconnect.apple.com/v1'
+          kid=os.environ['ASC_KEY_ID']; iss=os.environ['ASC_ISSUER_ID']
+          pk=base64.b64decode(os.environ['ASC_PRIVATE_KEY_B64']).decode()
+          now=int(time.time())
+          tok=jwt.encode({'iss':iss,'iat':now,'exp':now+1100,'aud':'appstoreconnect-v1'},pk,algorithm='ES256',headers={'kid':kid,'typ':'JWT'})
+          H={'Authorization':f'Bearer {tok}'}
+          def get(path,params=None):
+              r=requests.get(BASE+path,headers=H,params=params,timeout=45)
+              r.raise_for_status(); return r.json()
+          apps=get('/apps',{'filter[bundleId]':os.environ['BUNDLE_ID'],'limit':'5','fields[apps]':'bundleId,name,contentRightsDeclaration'})['data']
+          if len(apps)!=1: raise SystemExit('app lookup failed')
+          app=apps[0]; app_id=app['id']
+          rights=app.get('attributes',{}).get('contentRightsDeclaration','')
+          versions=get(f'/apps/{app_id}/appStoreVersions',{'filter[platform]':'IOS','limit':'50','fields[appStoreVersions]':'versionString,appVersionState,build'})['data']
+          version=next(v for v in versions if v.get('attributes',{}).get('versionString') in ('1.0','1.0.0'))
+          vid=version['id']; vstate=version.get('attributes',{}).get('appVersionState','')
+          locs=get(f'/appStoreVersions/{vid}/appStoreVersionLocalizations',{'limit':'50','fields[appStoreVersionLocalizations]':'locale,description'})['data']
+          eula='https://www.apple.com/legal/internet-services/itunes/dev/stdeula/'
+          eula_ok=bool(locs) and all((x.get('attributes',{}).get('description') or '').rstrip().endswith('Terms of Use (EULA): '+eula) for x in locs)
+          builds=get('/builds',{'filter[app]':app_id,'filter[version]':os.environ['BUILD_NUMBER'],'limit':'20','fields[builds]':'version,processingState,uploadedDate'})['data']
+          build_ok=any(b.get('attributes',{}).get('processingState')=='VALID' for b in builds)
+          price_ok=False
+          try:
+              sched=get(f'/apps/{app_id}/appPriceSchedule')['data']; sid=sched['id']
+              manual=get(f'/appPriceSchedules/{sid}/manualPrices',{'include':'appPricePoint,territory','limit':'200','fields[appPricePoints]':'customerPrice','fields[territories]':'currency'})
+              vals=[]
+              for x in manual.get('included',[]):
+                  if x.get('type')=='appPricePoints':
+                      try: vals.append(Decimal(str(x.get('attributes',{}).get('customerPrice','-1'))))
+                      except Exception: pass
+              price_ok=Decimal('0') in vals
+          except Exception:
+              price_ok=False
+          subs=get(f'/apps/{app_id}/reviewSubmissions',{'limit':'50','fields[reviewSubmissions]':'state,submittedDate,platform'})['data']
+          active=[s.get('attributes',{}).get('state') for s in subs if s.get('attributes',{}).get('state') in ('READY_FOR_REVIEW','WAITING_FOR_REVIEW','IN_REVIEW')]
+          with open('validation/appstore-preflight-result.txt','w') as f:
+              f.write(f'bundle={os.environ["BUNDLE_ID"]}\n')
+              f.write(f'build={os.environ["BUILD_NUMBER"]}\n')
+              f.write(f'build_valid={str(build_ok).lower()}\n')
+              f.write(f'content_rights={rights}\n')
+              f.write(f'app_price_free={str(price_ok).lower()}\n')
+              f.write(f'eula_at_description_end={str(eula_ok).lower()}\n')
+              f.write(f'app_version_state={vstate}\n')
+              f.write('active_review_states='+','.join(active)+'\n')
+          PY
+      - name: Record result
+        shell: bash
+        run: |
+          git config user.name 'Kamilunavo Release Bot'
+          git config user.email 'acciento89@gmail.com'
+          git add validation/appstore-preflight-result.txt
+          if ! git diff --cached --quiet; then
+            git commit -m 'Record 99.9 App Store preflight state'
+            git push origin HEAD:ios/storekit-connection-fix
+          fi
