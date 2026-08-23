@@ -1,4 +1,3 @@
-# Final 99.9 App Store submission workflow
 name: 99.9 Final App Store Submit
 
 on:
@@ -13,11 +12,10 @@ permissions:
 env:
   BUNDLE_ID: de.kamilunavo.ninenine
   BUILD_NUMBER: '16'
-  RELEASE_BRANCH: ios/storekit-connection-fix
 
 jobs:
   submit:
-    name: Final metadata and App Review submit
+    name: Finalize metadata and submit Build 16
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -25,29 +23,27 @@ jobs:
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
       ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
     steps:
-      - name: Checkout release branch
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
         with:
           ref: ios/storekit-connection-fix
 
       - name: Install dependencies
         run: python3 -m pip install --quiet pyjwt cryptography requests
 
-      - name: Finalize metadata and submit Build 16
+      - name: Restore description, set review note, and submit
         id: submit
         shell: bash
         run: |
           set +e
           mkdir -p validation
-          python3 - <<'PY' 2>&1 | tee /tmp/final-submit.log
+          python3 - <<'PY' 2>&1 | tee /tmp/submit.log
           import os, time, base64, json
           import jwt, requests
 
           BASE='https://api.appstoreconnect.apple.com/v1'
           BUNDLE=os.environ['BUNDLE_ID']
-          BUILD_NO=os.environ['BUILD_NUMBER']
-          EULA='https://www.apple.com/legal/internet-services/itunes/dev/stdeula/'
-          EULA_LINE='Terms of Use (EULA): '+EULA
+          BUILD=os.environ['BUILD_NUMBER']
+          EULA='Terms of Use (EULA): https://www.apple.com/legal/internet-services/itunes/dev/stdeula/'
 
           DE='''Wie nah kommst du an 100 %?
 
@@ -87,13 +83,21 @@ Choose your player name and customize the look with additional themes. Optional 
 
 99.9% is built around one question: how close can you really get to 100%?'''
 
-          kid=os.environ['ASC_KEY_ID']; iss=os.environ['ASC_ISSUER_ID']
-          raw=os.environ['ASC_PRIVATE_KEY_B64']
-          if not kid or not iss or not raw:
-              raise RuntimeError('ASC credentials missing')
-          key=base64.b64decode(raw).decode('utf-8')
+          REVIEW_NOTES='''99.9% is a one-tap precision game and does not require an account or login.
+
+Review path:
+1. Tap PLAY.
+2. Tap once to start the percentage run and tap again to stop it.
+3. Reaching 99.900% or higher continues the streak.
+4. WORLD LEADERBOARD shows best-hit and longest-streak rankings using a locally generated player ID and a user-selected display name.
+5. SETTINGS contains player-name settings plus purchase and restore options.
+
+Optional StoreKit in-app purchases unlock visual themes and Remove Ads. Google Mobile Ads/UMP is used for advertising and consent. No external payment method is used.'''
+
+          kid=os.environ['ASC_KEY_ID']; issuer=os.environ['ASC_ISSUER_ID']
+          key=base64.b64decode(os.environ['ASC_PRIVATE_KEY_B64']).decode()
           now=int(time.time())
-          token=jwt.encode({'iss':iss,'iat':now,'exp':now+1100,'aud':'appstoreconnect-v1'},key,algorithm='ES256',headers={'kid':kid,'typ':'JWT'})
+          token=jwt.encode({'iss':issuer,'iat':now,'exp':now+1100,'aud':'appstoreconnect-v1'},key,algorithm='ES256',headers={'kid':kid,'typ':'JWT'})
           H={'Authorization':f'Bearer {token}','Content-Type':'application/json'}
 
           def req(method,path,params=None,body=None,ok=(200,201,204)):
@@ -106,126 +110,80 @@ Choose your player name and customize the look with additional themes. Optional 
               if r.status_code==204 or not r.content: return None
               return r.json()
 
-          app=req('GET','/apps',{'filter[bundleId]':BUNDLE,'limit':'5'})['data']
-          if len(app)!=1: raise RuntimeError(f'Expected one app for {BUNDLE}, found {len(app)}')
-          app_id=app[0]['id']
-          print('APP',app_id,BUNDLE)
-
+          apps=req('GET','/apps',{'filter[bundleId]':BUNDLE,'limit':'5'})['data']
+          if len(apps)!=1: raise RuntimeError('99.9 app lookup failed')
+          app_id=apps[0]['id']
           req('PATCH',f'/apps/{app_id}',body={'data':{'type':'apps','id':app_id,'attributes':{'contentRightsDeclaration':'USES_THIRD_PARTY_CONTENT'}}})
-          print('Content rights set.')
 
-          versions=req('GET',f'/apps/{app_id}/appStoreVersions',{
-              'filter[platform]':'IOS','limit':'50','fields[appStoreVersions]':'platform,versionString,appVersionState,releaseType,build'
-          })['data']
-          candidates=[v for v in versions if v.get('attributes',{}).get('versionString') in ('1.0','1.0.0')]
-          if not candidates: raise RuntimeError('No iOS App Store version 1.0/1.0.0 found')
+          versions=req('GET',f'/apps/{app_id}/appStoreVersions',{'filter[platform]':'IOS','limit':'50','fields[appStoreVersions]':'versionString,appVersionState'})['data']
+          versions=[v for v in versions if v.get('attributes',{}).get('versionString') in ('1.0','1.0.0')]
+          if not versions: raise RuntimeError('App Store version 1.0 missing')
           editable={'PREPARE_FOR_SUBMISSION','READY_FOR_REVIEW','DEVELOPER_REJECTED','METADATA_REJECTED','REJECTED'}
-          version=next((v for v in candidates if v.get('attributes',{}).get('appVersionState') in editable),candidates[0])
-          version_id=version['id']; state=version.get('attributes',{}).get('appVersionState')
-          print('VERSION',version_id,state)
+          version=next((v for v in versions if v.get('attributes',{}).get('appVersionState') in editable),versions[0])
+          version_id=version['id']
 
-          locs=req('GET',f'/appStoreVersions/{version_id}/appStoreVersionLocalizations',{
-              'limit':'50','fields[appStoreVersionLocalizations]':'locale,description'
-          })['data']
-          if not locs: raise RuntimeError('No App Store version localizations found')
-
-          def description_for(locale):
-              base=DE if str(locale).lower().startswith('de') else EN
-              return base.rstrip()+'\n\n'+EULA_LINE
-
+          locs=req('GET',f'/appStoreVersions/{version_id}/appStoreVersionLocalizations',{'limit':'50','fields[appStoreVersionLocalizations]':'locale,description'})['data']
+          if not locs: raise RuntimeError('No App Store localization found')
           for loc in locs:
-              lid=loc['id']; locale=loc.get('attributes',{}).get('locale','en-US')
-              desc=description_for(locale)
-              if len(desc)>4000: raise RuntimeError('Generated description exceeds 4000 chars')
-              req('PATCH',f'/appStoreVersionLocalizations/{lid}',body={
-                  'data':{'type':'appStoreVersionLocalizations','id':lid,'attributes':{'description':desc}}
-              })
-              print('DESCRIPTION FIXED',locale,len(desc))
+              locale=loc.get('attributes',{}).get('locale','en-US')
+              base=DE if locale.lower().startswith('de') else EN
+              desc=base.rstrip()+'\n\n'+EULA
+              req('PATCH',f"/appStoreVersionLocalizations/{loc['id']}",body={'data':{'type':'appStoreVersionLocalizations','id':loc['id'],'attributes':{'description':desc}}})
+              print('DESCRIPTION RESTORED',locale)
 
-          check=req('GET',f'/appStoreVersions/{version_id}/appStoreVersionLocalizations',{
-              'limit':'50','fields[appStoreVersionLocalizations]':'locale,description'
-          })['data']
-          for loc in check:
-              d=(loc.get('attributes',{}).get('description') or '').rstrip()
-              if d==EULA_LINE or not d.endswith(EULA_LINE) or len(d)<500:
-                  raise RuntimeError('Description/EULA verification failed for '+str(loc.get('attributes',{}).get('locale')))
-          print('Descriptions restored; EULA verified as final line.')
+          verify=req('GET',f'/appStoreVersions/{version_id}/appStoreVersionLocalizations',{'limit':'50','fields[appStoreVersionLocalizations]':'locale,description'})['data']
+          for loc in verify:
+              desc=(loc.get('attributes',{}).get('description') or '').rstrip()
+              if len(desc)<500 or desc==EULA or not desc.endswith(EULA):
+                  raise RuntimeError('Description verification failed')
+          print('FULL DESCRIPTION + EULA VERIFIED')
 
-          builds=req('GET','/builds',{
-              'filter[app]':app_id,'filter[version]':BUILD_NO,'limit':'20','sort':'-uploadedDate',
-              'fields[builds]':'version,uploadedDate,processingState,buildAudienceType,usesNonExemptEncryption'
-          })['data']
+          builds=req('GET','/builds',{'filter[app]':app_id,'filter[version]':BUILD,'limit':'20','sort':'-uploadedDate','fields[builds]':'version,processingState'})['data']
           valid=[b for b in builds if b.get('attributes',{}).get('processingState')=='VALID']
-          if not valid: raise RuntimeError('Build 16 is not VALID')
+          if not valid: raise RuntimeError('Build 16 not VALID')
           build_id=valid[0]['id']
           req('PATCH',f'/appStoreVersions/{version_id}/relationships/build',body={'data':{'type':'builds','id':build_id}},ok=(204,))
-          print('BUILD ATTACHED',build_id)
 
-          submissions=req('GET',f'/apps/{app_id}/reviewSubmissions',{
-              'limit':'100','fields[reviewSubmissions]':'platform,submittedDate,state'
-          })['data']
-          terminal={'WAITING_FOR_REVIEW','IN_REVIEW'}
-          waiting=[s for s in submissions if s.get('attributes',{}).get('state') in terminal]
-          if state in terminal or waiting:
-              print('Already submitted/in review.')
-              final_state=state if state in terminal else waiting[0].get('attributes',{}).get('state')
-              submission_id=waiting[0]['id'] if waiting else 'existing'
+          detail=req('GET',f'/appStoreVersions/{version_id}/appStoreReviewDetail')['data']
+          attrs=detail.get('attributes',{})
+          required=['contactFirstName','contactLastName','contactPhone','contactEmail']
+          missing=[k for k in required if not attrs.get(k)]
+          if missing: raise RuntimeError('App Review contact information incomplete: '+','.join(missing))
+          req('PATCH',f"/appStoreReviewDetails/{detail['id']}",body={'data':{'type':'appStoreReviewDetails','id':detail['id'],'attributes':{'notes':REVIEW_NOTES}}})
+          print('REVIEW CONTACT VERIFIED; REVIEW NOTES SET')
+
+          state=version.get('attributes',{}).get('appVersionState')
+          if state in {'WAITING_FOR_REVIEW','IN_REVIEW'}:
+              final_state=state; submission_id='existing'
           else:
+              submissions=req('GET',f'/apps/{app_id}/reviewSubmissions',{'limit':'100','fields[reviewSubmissions]':'platform,state'})['data']
               ready=[s for s in submissions if s.get('attributes',{}).get('state')=='READY_FOR_REVIEW']
-              if ready:
-                  sub=ready[0]
-              else:
-                  sub=req('POST','/reviewSubmissions',body={'data':{
-                      'type':'reviewSubmissions','attributes':{'platform':'IOS'},
-                      'relationships':{'app':{'data':{'type':'apps','id':app_id}}}
-                  }})['data']
+              sub=ready[0] if ready else req('POST','/reviewSubmissions',body={'data':{'type':'reviewSubmissions','attributes':{'platform':'IOS'},'relationships':{'app':{'data':{'type':'apps','id':app_id}}}}})['data']
               submission_id=sub['id']
-              print('SUBMISSION',submission_id)
-
-              items=req('GET',f'/reviewSubmissions/{submission_id}/items',{
-                  'limit':'200','include':'appStoreVersion',
-                  'fields[reviewSubmissionItems]':'state,appStoreVersion',
-                  'fields[appStoreVersions]':'versionString,appVersionState'
-              })['data']
-              linked=False
-              for item in items:
-                  rel=item.get('relationships',{}).get('appStoreVersion',{}).get('data')
-                  if rel and rel.get('id')==version_id: linked=True
+              items=req('GET',f'/reviewSubmissions/{submission_id}/items',{'limit':'200','include':'appStoreVersion','fields[reviewSubmissionItems]':'state,appStoreVersion','fields[appStoreVersions]':'versionString'})['data']
+              linked=any((i.get('relationships',{}).get('appStoreVersion',{}).get('data') or {}).get('id')==version_id for i in items)
               if not linked:
-                  req('POST','/reviewSubmissionItems',body={'data':{
-                      'type':'reviewSubmissionItems',
-                      'relationships':{
-                          'reviewSubmission':{'data':{'type':'reviewSubmissions','id':submission_id}},
-                          'appStoreVersion':{'data':{'type':'appStoreVersions','id':version_id}}
-                      }
-                  }})
-                  print('VERSION ADDED TO SUBMISSION')
-
-              result=req('PATCH',f'/reviewSubmissions/{submission_id}',body={'data':{
-                  'type':'reviewSubmissions','id':submission_id,'attributes':{'submitted':True}
-              }})['data']
+                  req('POST','/reviewSubmissionItems',body={'data':{'type':'reviewSubmissionItems','relationships':{'reviewSubmission':{'data':{'type':'reviewSubmissions','id':submission_id}},'appStoreVersion':{'data':{'type':'appStoreVersions','id':version_id}}}}})
+              result=req('PATCH',f'/reviewSubmissions/{submission_id}',body={'data':{'type':'reviewSubmissions','id':submission_id,'attributes':{'submitted':True}}})['data']
               final_state=result.get('attributes',{}).get('state')
-              print('SUBMIT ACCEPTED',final_state)
               for _ in range(18):
-                  if final_state in terminal: break
+                  if final_state in {'WAITING_FOR_REVIEW','IN_REVIEW'}: break
                   time.sleep(5)
                   result=req('GET',f'/reviewSubmissions/{submission_id}')['data']
                   final_state=result.get('attributes',{}).get('state')
-                  print('STATE',final_state)
-              if final_state not in terminal:
-                  raise RuntimeError('Submission did not reach WAITING_FOR_REVIEW/IN_REVIEW; state='+str(final_state))
+              if final_state not in {'WAITING_FOR_REVIEW','IN_REVIEW'}:
+                  raise RuntimeError('Submit did not reach review state: '+str(final_state))
 
-          out=os.path.join(os.environ['GITHUB_WORKSPACE'],'validation','appstore-final-submit-result.txt')
-          with open(out,'w',encoding='utf-8') as f:
+          with open('validation/appstore-final-submit-result.txt','w') as f:
               f.write('result=success\n')
-              f.write(f'bundle={BUNDLE}\n')
-              f.write(f'build={BUILD_NO}\n')
+              f.write('bundle='+BUNDLE+'\n')
+              f.write('build='+BUILD+'\n')
               f.write('description_restored=true\n')
               f.write('eula_at_description_end=true\n')
-              f.write('review_contact_added=false\n')
-              f.write('review_notes_added=false\n')
-              f.write(f'review_state={final_state}\n')
-              f.write(f'review_submission_id={submission_id}\n')
+              f.write('review_contact_verified=true\n')
+              f.write('review_notes_added=true\n')
+              f.write('review_state='+str(final_state)+'\n')
+              f.write('review_submission_id='+str(submission_id)+'\n')
           print('FINAL SUCCESS',final_state)
           PY
           rc=${PIPESTATUS[0]}
@@ -235,7 +193,7 @@ Choose your player name and customize the look with additional themes. Optional 
               echo 'bundle=de.kamilunavo.ninenine'
               echo 'build=16'
               echo '--- last log lines ---'
-              tail -n 80 /tmp/final-submit.log
+              tail -n 80 /tmp/submit.log
             } > validation/appstore-final-submit-result.txt
             echo 'result=failure' >> "$GITHUB_OUTPUT"
           else
@@ -243,17 +201,13 @@ Choose your player name and customize the look with additional themes. Optional 
           fi
           exit 0
 
-      - name: Record final App Store result
+      - name: Record result
         if: always()
-        shell: bash
         run: |
-          set -euo pipefail
           git config user.name 'Kamilunavo Release Bot'
           git config user.email 'acciento89@gmail.com'
           git add validation/appstore-final-submit-result.txt
-          if git diff --cached --quiet; then
-            echo 'Result unchanged.'
-          else
+          if ! git diff --cached --quiet; then
             git commit -m 'Record 99.9 final App Store submission result'
             git push origin HEAD:ios/storekit-connection-fix
           fi
