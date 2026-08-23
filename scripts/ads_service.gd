@@ -7,10 +7,12 @@ signal privacy_options_changed(required: bool)
 signal ad_error(message: String)
 
 const TEST_INTERSTITIAL_ANDROID := "ca-app-pub-3940256099942544/1033173712"
-const TEST_INTERSTITIAL_IOS := "ca-app-pub-3940256099942544/4411468910"
+const INTERSTITIAL_IOS := "ca-app-pub-8944085355624754/9156045067"
+const SAVE_PATH := "user://save.json"
 
 var _started := false
 var _ads_ready := false
+var _ads_removed := false
 var _interstitial_ad = null
 var _initialization_listener = null
 var _load_callback = null
@@ -20,6 +22,7 @@ var _retry_timer: Timer
 
 
 func _ready() -> void:
+    _ads_removed = _read_cached_remove_ads()
     _consent_information = UserMessagingPlatform.consent_information
     _retry_timer = Timer.new()
     _retry_timer.one_shot = true
@@ -28,10 +31,32 @@ func _ready() -> void:
     add_child(_retry_timer)
 
 
+func set_ads_removed(removed: bool) -> void:
+    _ads_removed = removed
+    if not removed:
+        return
+    _ads_ready = false
+    if _retry_timer != null and not _retry_timer.is_stopped():
+        _retry_timer.stop()
+    if _interstitial_ad != null:
+        _interstitial_ad.destroy()
+        _interstitial_ad = null
+    interstitial_state_changed.emit(false)
+    ads_state_changed.emit(false, "ADS REMOVED")
+
+
+func are_ads_removed() -> bool:
+    return _ads_removed
+
+
 func start_ads() -> void:
     if _started:
         return
     _started = true
+
+    if _ads_removed:
+        ads_state_changed.emit(false, "ADS REMOVED")
+        return
 
     if OS.get_name() not in ["iOS", "Android"]:
         ads_state_changed.emit(false, "ADS DISABLED ON THIS PLATFORM")
@@ -42,21 +67,21 @@ func start_ads() -> void:
 
 
 func is_ads_ready() -> bool:
-    return _ads_ready
+    return _ads_ready and not _ads_removed
 
 
 func is_interstitial_ready() -> bool:
-    return _interstitial_ad != null
+    return _interstitial_ad != null and not _ads_removed
 
 
 func is_privacy_options_required() -> bool:
-    if OS.get_name() not in ["iOS", "Android"] or _consent_information == null:
+    if _ads_removed or OS.get_name() not in ["iOS", "Android"] or _consent_information == null:
         return false
     return _consent_information.get_privacy_options_requirement_status() == ConsentInformation.PrivacyOptionsRequirementStatus.REQUIRED
 
 
 func show_privacy_options() -> void:
-    if OS.get_name() not in ["iOS", "Android"]:
+    if _ads_removed or OS.get_name() not in ["iOS", "Android"]:
         return
 
     UserMessagingPlatform.show_privacy_options_form(func(error: FormError) -> void:
@@ -72,6 +97,8 @@ func show_privacy_options() -> void:
 
 
 func show_interstitial_if_ready() -> bool:
+    if _ads_removed:
+        return false
     if not _consent_allows_ads():
         _disable_ads_for_privacy("ADS DISABLED · CONSENT REQUIRED")
         return false
@@ -87,6 +114,8 @@ func show_interstitial_if_ready() -> bool:
 
 
 func _request_user_consent() -> void:
+    if _ads_removed:
+        return
     var params := ConsentRequestParameters.new()
     _consent_information.update(
         params,
@@ -105,6 +134,8 @@ func _request_user_consent() -> void:
 
 
 func _load_and_show_consent_form() -> void:
+    if _ads_removed:
+        return
     UserMessagingPlatform.load_consent_form(
         func(form: ConsentForm) -> void:
             form.show(func(error: FormError) -> void:
@@ -123,7 +154,7 @@ func _load_and_show_consent_form() -> void:
 
 
 func _consent_allows_ads() -> bool:
-    if _consent_information == null:
+    if _ads_removed or _consent_information == null:
         return false
     var status := _consent_information.get_consent_status()
     return status == ConsentInformation.ConsentStatus.NOT_REQUIRED or status == ConsentInformation.ConsentStatus.OBTAINED
@@ -141,40 +172,46 @@ func _disable_ads_for_privacy(message: String) -> void:
 
 
 func _initialize_mobile_ads() -> void:
-    if _ads_ready or not _consent_allows_ads():
+    if _ads_removed or _ads_ready or not _consent_allows_ads():
         return
 
-    ads_state_changed.emit(false, "INITIALIZING TEST ADS")
+    ads_state_changed.emit(false, "INITIALIZING ADS")
     var request_configuration := RequestConfiguration.new()
     MobileAds.set_request_configuration(request_configuration)
 
     _initialization_listener = OnInitializationCompleteListener.new()
     _initialization_listener.on_initialization_complete = func(_status: InitializationStatus) -> void:
+        if _ads_removed:
+            set_ads_removed(true)
+            return
         if not _consent_allows_ads():
             _disable_ads_for_privacy("ADS DISABLED · CONSENT REQUIRED")
             return
         _ads_ready = true
-        ads_state_changed.emit(true, "TEST ADS READY")
+        ads_state_changed.emit(true, "ADS READY")
         _load_interstitial()
 
     MobileAds.initialize(_initialization_listener)
 
 
 func _load_interstitial() -> void:
-    if not _ads_ready or not _consent_allows_ads() or _interstitial_ad != null:
+    if _ads_removed or not _ads_ready or not _consent_allows_ads() or _interstitial_ad != null:
         return
 
-    var unit_id := TEST_INTERSTITIAL_ANDROID if OS.get_name() == "Android" else TEST_INTERSTITIAL_IOS
+    var unit_id := TEST_INTERSTITIAL_ANDROID if OS.get_name() == "Android" else INTERSTITIAL_IOS
     _load_callback = InterstitialAdLoadCallback.new()
 
     _load_callback.on_ad_failed_to_load = func(error: LoadAdError) -> void:
         _interstitial_ad = null
         interstitial_state_changed.emit(false)
         ad_error.emit("INTERSTITIAL LOAD FAILED · %s" % error.message)
-        if _ads_ready and _consent_allows_ads() and _retry_timer.is_stopped():
+        if not _ads_removed and _ads_ready and _consent_allows_ads() and _retry_timer.is_stopped():
             _retry_timer.start()
 
     _load_callback.on_ad_loaded = func(ad: InterstitialAd) -> void:
+        if _ads_removed:
+            ad.destroy()
+            return
         if not _consent_allows_ads():
             ad.destroy()
             _disable_ads_for_privacy("ADS DISABLED · CONSENT REQUIRED")
@@ -187,7 +224,7 @@ func _load_interstitial() -> void:
 
 
 func _attach_full_screen_callback() -> void:
-    if _interstitial_ad == null:
+    if _interstitial_ad == null or _ads_removed:
         return
 
     _full_screen_callback = FullScreenContentCallback.new()
@@ -210,7 +247,20 @@ func _finish_interstitial() -> void:
         _interstitial_ad = null
     interstitial_state_changed.emit(false)
     interstitial_closed.emit()
-    _load_interstitial()
+    if not _ads_removed:
+        _load_interstitial()
+
+
+func _read_cached_remove_ads() -> bool:
+    if not FileAccess.file_exists(SAVE_PATH):
+        return false
+    var file := FileAccess.open(SAVE_PATH, FileAccess.READ)
+    if file == null:
+        return false
+    var parsed = JSON.parse_string(file.get_as_text())
+    if typeof(parsed) != TYPE_DICTIONARY:
+        return false
+    return bool(parsed.get("remove_ads_owned", false))
 
 
 func _exit_tree() -> void:
