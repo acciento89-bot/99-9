@@ -1,7 +1,9 @@
 name: 99.9 Final App Store Submit
 
 on:
-  pull_request:
+  push:
+    branches:
+      - ios/storekit-connection-fix
     paths:
       - '.github/workflows/ios-appstore-final-submit.yml'
   workflow_dispatch:
