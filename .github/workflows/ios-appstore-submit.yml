@@ -1,0 +1,190 @@
+name: 99.9 App Store Submit
+
+on:
+  push:
+    branches:
+      - ios/storekit-connection-fix
+    paths:
+      - '.github/workflows/ios-appstore-submit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BUNDLE_ID: de.kamilunavo.ninenine
+  BUILD_NUMBER: '16'
+
+jobs:
+  submit:
+    name: Finalize App Store Connect and submit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
+    steps:
+      - name: Verify ASC credentials are available
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$ASC_KEY_ID"
+          test -n "$ASC_ISSUER_ID"
+          test -n "$ASC_PRIVATE_KEY_B64"
+
+      - name: Install App Store Connect API dependencies
+        shell: bash
+        run: |
+          python3 -m pip install --quiet pyjwt cryptography requests
+
+      - name: Attach Build 16 and submit version for App Review
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, time, base64, json, sys
+          import jwt, requests
+
+          BASE = 'https://api.appstoreconnect.apple.com/v1'
+          bundle_id = os.environ['BUNDLE_ID']
+          build_number = os.environ['BUILD_NUMBER']
+          key_id = os.environ['ASC_KEY_ID']
+          issuer_id = os.environ['ASC_ISSUER_ID']
+          private_key = base64.b64decode(os.environ['ASC_PRIVATE_KEY_B64']).decode('utf-8')
+          now = int(time.time())
+          token = jwt.encode(
+              {'iss': issuer_id, 'iat': now, 'exp': now + 1100, 'aud': 'appstoreconnect-v1'},
+              private_key,
+              algorithm='ES256',
+              headers={'kid': key_id, 'typ': 'JWT'},
+          )
+          headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+
+          def call(method, path, *, params=None, body=None, ok=(200,201,204)):
+              url = BASE + path
+              r = requests.request(method, url, headers=headers, params=params, json=body, timeout=45)
+              if r.status_code not in ok:
+                  print(f'ASC ERROR {method} {path}: HTTP {r.status_code}')
+                  try:
+                      print(json.dumps(r.json(), indent=2))
+                  except Exception:
+                      print(r.text)
+                  raise SystemExit(1)
+              if r.status_code == 204 or not r.content:
+                  return None
+              return r.json()
+
+          apps = call('GET', '/apps', params={'filter[bundleId]': bundle_id, 'limit': '5'})['data']
+          if len(apps) != 1:
+              print(f'Expected exactly one app for {bundle_id}, found {len(apps)}')
+              raise SystemExit(1)
+          app_id = apps[0]['id']
+          print(f'App found: {bundle_id} / {app_id}')
+
+          versions = call('GET', f'/apps/{app_id}/appStoreVersions', params={
+              'filter[platform]': 'IOS',
+              'limit': '50',
+              'fields[appStoreVersions]': 'platform,versionString,appStoreState,appVersionState,releaseType,build'
+          })['data']
+          candidates = [v for v in versions if v.get('attributes', {}).get('versionString') in ('1.0', '1.0.0')]
+          if not candidates:
+              print('No iOS App Store version 1.0/1.0.0 exists in App Store Connect.')
+              print('Existing versions:', [(v.get('attributes',{}).get('versionString'), v.get('attributes',{}).get('appVersionState')) for v in versions])
+              raise SystemExit(1)
+          editable_states = {'PREPARE_FOR_SUBMISSION','READY_FOR_REVIEW','DEVELOPER_REJECTED','METADATA_REJECTED','REJECTED'}
+          editable = [v for v in candidates if (v.get('attributes',{}).get('appVersionState') or v.get('attributes',{}).get('appStoreState')) in editable_states]
+          version = editable[0] if editable else candidates[0]
+          version_id = version['id']
+          attrs = version.get('attributes', {})
+          print('Selected App Store version:', attrs.get('versionString'), attrs.get('appVersionState') or attrs.get('appStoreState'), version_id)
+
+          builds = call('GET', '/builds', params={
+              'filter[app]': app_id,
+              'filter[version]': build_number,
+              'filter[buildAudienceType]': 'APP_STORE_ELIGIBLE',
+              'limit': '20',
+              'sort': '-uploadedDate',
+              'fields[builds]': 'version,uploadedDate,processingState,buildAudienceType,usesNonExemptEncryption'
+          })['data']
+          if not builds:
+              print(f'Build {build_number} is not yet available as APP_STORE_ELIGIBLE.')
+              raise SystemExit(1)
+          valid = [b for b in builds if b.get('attributes',{}).get('processingState') == 'VALID']
+          if not valid:
+              print('Build 16 exists but is not VALID yet:', [(b['id'], b.get('attributes',{}).get('processingState')) for b in builds])
+              raise SystemExit(1)
+          build = valid[0]
+          build_id = build['id']
+          print('Build 16 VALID:', build_id)
+
+          call('PATCH', f'/appStoreVersions/{version_id}/relationships/build', body={
+              'data': {'type': 'builds', 'id': build_id}
+          }, ok=(204,))
+          print('Build 16 attached to App Store version.')
+
+          state = attrs.get('appVersionState') or attrs.get('appStoreState')
+          if state in {'WAITING_FOR_REVIEW','IN_REVIEW','PENDING_APPLE_RELEASE','PENDING_DEVELOPER_RELEASE','PROCESSING_FOR_DISTRIBUTION','READY_FOR_DISTRIBUTION','READY_FOR_SALE'}:
+              print('Version is already submitted or beyond submission state:', state)
+              sys.exit(0)
+
+          submissions = call('GET', f'/apps/{app_id}/reviewSubmissions', params={
+              'filter[platform]': 'IOS',
+              'limit': '50',
+              'include': 'items,appStoreVersionForReview',
+              'fields[reviewSubmissions]': 'platform,submittedDate,state,items,appStoreVersionForReview'
+          })['data']
+          active = [s for s in submissions if s.get('attributes',{}).get('state') == 'READY_FOR_REVIEW']
+          if active:
+              submission = active[0]
+              print('Using existing READY_FOR_REVIEW submission:', submission['id'])
+          else:
+              payload = {
+                  'data': {
+                      'type': 'reviewSubmissions',
+                      'attributes': {'platform': 'IOS'},
+                      'relationships': {'app': {'data': {'type': 'apps', 'id': app_id}}}
+                  }
+              }
+              submission = call('POST', '/reviewSubmissions', body=payload)['data']
+              print('Created review submission:', submission['id'])
+          submission_id = submission['id']
+
+          items_resp = call('GET', f'/reviewSubmissions/{submission_id}/items', params={
+              'include': 'appStoreVersion',
+              'limit': '200',
+              'fields[reviewSubmissionItems]': 'state,appStoreVersion',
+              'fields[appStoreVersions]': 'versionString,appVersionState'
+          })
+          linked_version_ids = set()
+          for item in items_resp.get('data', []):
+              rel = item.get('relationships', {}).get('appStoreVersion', {}).get('data')
+              if rel:
+                  linked_version_ids.add(rel['id'])
+          if version_id not in linked_version_ids:
+              item_payload = {
+                  'data': {
+                      'type': 'reviewSubmissionItems',
+                      'relationships': {
+                          'reviewSubmission': {'data': {'type': 'reviewSubmissions', 'id': submission_id}},
+                          'appStoreVersion': {'data': {'type': 'appStoreVersions', 'id': version_id}}
+                      }
+                  }
+              }
+              call('POST', '/reviewSubmissionItems', body=item_payload)
+              print('App Store version added to review submission.')
+          else:
+              print('App Store version already present in review submission.')
+
+          submit_payload = {
+              'data': {
+                  'type': 'reviewSubmissions',
+                  'id': submission_id,
+                  'attributes': {'submitted': True}
+              }
+          }
+          result = call('PATCH', f'/reviewSubmissions/{submission_id}', body=submit_payload)['data']
+          final_state = result.get('attributes', {}).get('state')
+          print('SUBMITTED TO APP REVIEW. Review submission state:', final_state)
+          print('Review submission id:', submission_id)
+          PY
