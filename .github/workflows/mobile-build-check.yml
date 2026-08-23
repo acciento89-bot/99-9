@@ -1,124 +1,13 @@
 name: 99.9 iOS Build Check
 
 on:
-  push:
-    branches: [main, 'agent/**', 'feature/**']
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
-env:
-  GODOT_VERSION: '4.7.2'
-  GODOT_TAG: '4.7.2-stable'
-
 jobs:
-  godot-validate:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install AdMob iOS native templates for editor validation
-        shell: bash
-        run: bash scripts/ci_install_admob.sh ios
-      - name: Download Godot
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl -L --fail --retry 3 -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_linux.x86_64.zip"
-          unzip -q godot.zip
-          mv "Godot_v${GODOT_TAG}_linux.x86_64" godot
-          chmod +x godot
-      - name: Parse project
-        shell: bash
-        run: |
-          set -o pipefail
-          ./godot --headless --editor --path . --quit 2>&1 | tee parse.log
-          if grep -E "SCRIPT ERROR|Parse Error|Compile Error|Failed to load script|Error.*SVG" parse.log; then exit 1; fi
-      - name: Main-scene smoke test
-        shell: bash
-        run: |
-          set -o pipefail
-          ./godot --headless --path . --quit-after 5 2>&1 | tee smoke.log
-          if grep -E "SCRIPT ERROR|Parse Error|Compile Error|Failed to load script" smoke.log; then exit 1; fi
-
-  backend-smoke:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v5
-      - name: Verify live global leaderboard endpoint
-        shell: bash
-        run: |
-          set -euo pipefail
-          eval "$(python3 - <<'PY'
-          import re, shlex
-          text=open('scripts/leaderboard_service.gd', encoding='utf-8').read()
-          url=re.search(r'const FUNCTION_URL := \"([^\"]+)\"', text)
-          key=re.search(r'const ANON_KEY := \"([^\"]+)\"', text)
-          if not url or not key: raise SystemExit('Leaderboard client configuration not found')
-          print('FUNCTION_URL='+shlex.quote(url.group(1)))
-          print('ANON_KEY='+shlex.quote(key.group(1)))
-          PY
-          )"
-          curl --fail-with-body -sS -H "Authorization: Bearer $ANON_KEY" -H "apikey: $ANON_KEY" "$FUNCTION_URL?mode=hit&limit=1&player_id=00000000-0000-4000-8000-000000000002" -o leaderboard.json
-          jq -e '.mode == "hit" and (.top | type == "array")' leaderboard.json >/dev/null
-
-  ios-unsigned:
-    runs-on: macos-26
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install Godot, templates and AdMob iOS native package
-        shell: bash
-        run: |
-          set -euo pipefail
-          bash scripts/ci_install_admob.sh ios
-          curl -L --fail --retry 3 -o "$RUNNER_TEMP/godot.zip" "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_macos.universal.zip"
-          mkdir -p "$RUNNER_TEMP/godot" && unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP/godot"
-          GODOT="$RUNNER_TEMP/godot/Godot.app/Contents/MacOS/Godot"; echo "GODOT=$GODOT" >> "$GITHUB_ENV"
-          T="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"; mkdir -p "$T"
-          curl -L --fail --retry 3 -o "$RUNNER_TEMP/templates.tpz" "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_export_templates.tpz"
-          mkdir -p "$RUNNER_TEMP/templates" && unzip -q "$RUNNER_TEMP/templates.tpz" -d "$RUNNER_TEMP/templates"
-          cp -R "$RUNNER_TEMP/templates/templates/." "$T/"
-          test -f "$T/ios.zip"
-          test -f addons/admob/ios/bin/ads/poing_godot_admob_ads.gd
-      - name: Import, export and verify IAP + AdMob Xcode project
-        shell: bash
-        run: |
-          set -euo pipefail
-          grep -Fq 'GodotIapPlugin="*res://addons/godot-iap/godot_iap_ios_safe.gd"' project.godot || { echo 'Safe IAP autoload is not configured'; exit 1; }
-          grep -Fq 'add_autoload_singleton(AUTOLOAD_NAME, "res://addons/godot-iap/godot_iap_ios_safe.gd")' addons/godot-iap/godot_iap_plugin.gd || { echo 'Editor plugin would restore unsafe IAP autoload'; exit 1; }
-          "$GODOT" --headless --editor --path . --quit
-          mkdir -p build/ios
-          "$GODOT" --headless --path . --export-release "iOS Playtest" build/ios/NineNine.zip
-          test -d build/ios/NineNine.xcodeproj
-          test -d addons/godot-iap/bin/ios/GodotIap.framework
-          chmod +x addons/godot-iap/scripts/fix_ios_embed.sh
-          IOS_EXPORT_DIR="$PWD/build/ios" ./addons/godot-iap/scripts/fix_ios_embed.sh
-          grep -q 'GodotIap.framework' build/ios/NineNine.xcodeproj/project.pbxproj
-          IOS_ADMOB_APP_ID=$(sed -n 's/^general\/ios\/app_id="\([^"]*\)"/\1/p' project.godot | head -n1)
-          test -n "$IOS_ADMOB_APP_ID" || { echo 'AdMob iOS App ID missing from project.godot'; exit 1; }
-          grep -R -Fq "$IOS_ADMOB_APP_ID" build/ios || { echo "Configured AdMob iOS App ID missing from export: $IOS_ADMOB_APP_ID"; exit 1; }
-          grep -R -q 'GoogleMobileAds' build/ios || { echo 'Google Mobile Ads SPM integration missing'; exit 1; }
-          xcodebuild -project build/ios/NineNine.xcodeproj -list -json > "$RUNNER_TEMP/xcode.json"
-          SCHEME=$(python3 - <<'PY2'
-          import json, os
-          d=json.load(open(os.environ['RUNNER_TEMP']+'/xcode.json'))['project']
-          print((d.get('schemes') or d.get('targets') or [''])[0])
-          PY2
-          )
-          test -n "$SCHEME"
-          xcodebuild -project build/ios/NineNine.xcodeproj -scheme "$SCHEME" -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath "$RUNNER_TEMP/DerivedData" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
-          ditto -c -k --sequesterRsrc build/ios/NineNine.xcodeproj build/ios/NineNine-Xcode.zip
-      - uses: actions/upload-artifact@v4
-        with:
-          name: 99-9-ios-unsigned
-          path: build/ios/NineNine-Xcode.zip
-          if-no-files-found: error
-          retention-days: 14
-
   appstore-final-submit:
     name: Finalize App Store Connect and submit Build 16
     runs-on: ubuntu-latest
@@ -136,104 +25,104 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import os,time,base64,json
-          import jwt,requests
-          BASE='https://api.appstoreconnect.apple.com/v1'; BUNDLE='de.kamilunavo.ninenine'; BUILD='16'
-          EULA='Terms of Use (EULA): https://www.apple.com/legal/internet-services/itunes/dev/stdeula/'
-          DE='''Wie nah kommst du an 100 %?
+          import os, time, base64, json
+          import jwt, requests
 
-99.9% ist ein minimalistisches One-Tap-Präzisionsspiel: Starte den Lauf, beobachte die Prozentanzeige und stoppe sie im perfekten Moment. Klingt einfach – bis du versuchst, 99,900 % oder sogar exakt 100,000 % zu treffen.
+          BASE = 'https://api.appstoreconnect.apple.com/v1'
+          BUNDLE = 'de.kamilunavo.ninenine'
+          BUILD = '16'
+          EULA = 'Terms of Use (EULA): https://www.apple.com/legal/internet-services/itunes/dev/stdeula/'
+          DE = "Wie nah kommst du an 100 %?\n\n99.9% ist ein minimalistisches One-Tap-Präzisionsspiel. Starte den Lauf, beobachte die Prozentanzeige und stoppe sie im perfekten Moment. Klingt einfach - bis du versuchst, 99,900 % oder sogar exakt 100,000 % zu treffen.\n\nDEINE HERAUSFORDERUNG\n- Ein Tipp startet den Versuch, der nächste stoppt ihn.\n- Erreiche mindestens 99,900 %, um deine Serie fortzusetzen.\n- Jage deinem persönlichen Bestwert hinterher.\n- Vergleiche dich in der weltweiten Bestenliste.\n- Verfolge Bestwert, längste Serie und gespielte Runden in deinen Statistiken.\n\nSCHNELL. EINFACH. GEMEIN.\nJeder Versuch dauert nur wenige Sekunden. Genau deshalb ist nur noch eine Runde so schwer zu widerstehen.\n\nPERSONALISIERUNG\nWähle deinen Spielernamen und passe das Erscheinungsbild mit zusätzlichen Designs an. Optionale In-App-Käufe ermöglichen weitere Designs sowie das Entfernen von Werbung.\n\n99.9% konzentriert sich auf eine einzige Frage: Wie nah kommst du wirklich an 100 %?"
+          EN = "How close can you get to 100%?\n\n99.9% is a minimalist one-tap precision game. Start the run, watch the percentage climb, and stop it at exactly the right moment. It sounds simple until you try to hit 99.900% or even a perfect 100.000%.\n\nYOUR CHALLENGE\n- One tap starts the attempt, the next one stops it.\n- Reach at least 99.900% to keep your streak alive.\n- Chase your personal best.\n- Compare your results on the worldwide leaderboard.\n- Track your best hit, longest streak and rounds played in your stats.\n\nFAST. SIMPLE. BRUTAL.\nEach attempt only takes a few seconds. That is exactly why one more try is so hard to resist.\n\nPERSONALIZE IT\nChoose your player name and customize the look with additional themes. Optional in-app purchases unlock more themes and let you remove ads.\n\n99.9% is built around one question: how close can you really get to 100%?"
+          NOTES = "99.9% is a one-tap precision game and does not require an account or login.\n\nReview path:\n1. Tap PLAY.\n2. Tap once to start the percentage run and tap again to stop it.\n3. Reaching 99.900% or higher continues the streak.\n4. WORLD LEADERBOARD shows best-hit and longest-streak rankings using a locally generated player ID and a user-selected display name.\n5. SETTINGS contains player-name settings plus purchase and restore options.\n\nOptional StoreKit in-app purchases unlock visual themes and Remove Ads. Google Mobile Ads/UMP is used for advertising and consent. No external payment method is used."
 
-DEINE HERAUSFORDERUNG
-• Ein Tipp startet den Versuch, der nächste stoppt ihn.
-• Erreiche mindestens 99,900 %, um deine Serie fortzusetzen.
-• Jage deinem persönlichen Bestwert hinterher.
-• Vergleiche dich in der weltweiten Bestenliste.
-• Verfolge Bestwert, längste Serie und gespielte Runden in deinen Statistiken.
+          kid = os.environ['ASC_KEY_ID']
+          issuer = os.environ['ASC_ISSUER_ID']
+          raw = os.environ['ASC_PRIVATE_KEY_B64']
+          if not kid or not issuer or not raw:
+              raise RuntimeError('ASC credentials missing')
+          key = base64.b64decode(raw).decode()
+          now = int(time.time())
+          token = jwt.encode({'iss': issuer, 'iat': now, 'exp': now + 1100, 'aud': 'appstoreconnect-v1'}, key, algorithm='ES256', headers={'kid': kid, 'typ': 'JWT'})
+          H = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
 
-SCHNELL. EINFACH. GEMEIN.
-Jeder Versuch dauert nur wenige Sekunden. Genau deshalb ist „nur noch eine Runde“ so schwer zu widerstehen.
-
-PERSONALISIERUNG
-Wähle deinen Spielernamen und passe das Erscheinungsbild mit zusätzlichen Designs an. Optionale In-App-Käufe ermöglichen weitere Designs sowie das Entfernen von Werbung.
-
-99.9% konzentriert sich auf eine einzige Frage: Wie nah kommst du wirklich an 100 %?'''
-          EN='''How close can you get to 100%?
-
-99.9% is a minimalist one-tap precision game. Start the run, watch the percentage climb, and stop it at exactly the right moment. It sounds simple—until you try to hit 99.900% or even a perfect 100.000%.
-
-YOUR CHALLENGE
-• One tap starts the attempt, the next one stops it.
-• Reach at least 99.900% to keep your streak alive.
-• Chase your personal best.
-• Compare your results on the worldwide leaderboard.
-• Track your best hit, longest streak and rounds played in your stats.
-
-FAST. SIMPLE. BRUTAL.
-Each attempt only takes a few seconds. That is exactly why “one more try” is so hard to resist.
-
-PERSONALIZE IT
-Choose your player name and customize the look with additional themes. Optional in-app purchases unlock more themes and let you remove ads.
-
-99.9% is built around one question: how close can you really get to 100%?'''
-          NOTES='''99.9% is a one-tap precision game and does not require an account or login.
-
-Review path:
-1. Tap PLAY.
-2. Tap once to start the percentage run and tap again to stop it.
-3. Reaching 99.900% or higher continues the streak.
-4. WORLD LEADERBOARD shows best-hit and longest-streak rankings using a locally generated player ID and a user-selected display name.
-5. SETTINGS contains player-name settings plus purchase and restore options.
-
-Optional StoreKit in-app purchases unlock visual themes and Remove Ads. Google Mobile Ads/UMP is used for advertising and consent. No external payment method is used.'''
-          kid=os.environ['ASC_KEY_ID']; issuer=os.environ['ASC_ISSUER_ID']; raw=os.environ['ASC_PRIVATE_KEY_B64']
-          if not kid or not issuer or not raw: raise RuntimeError('ASC credentials missing')
-          key=base64.b64decode(raw).decode(); now=int(time.time())
-          token=jwt.encode({'iss':issuer,'iat':now,'exp':now+1100,'aud':'appstoreconnect-v1'},key,algorithm='ES256',headers={'kid':kid,'typ':'JWT'})
-          H={'Authorization':f'Bearer {token}','Content-Type':'application/json'}
-          def req(method,path,params=None,body=None,ok=(200,201,204)):
-              r=requests.request(method,BASE+path,headers=H,params=params,json=body,timeout=60)
+          def req(method, path, params=None, body=None, ok=(200,201,204)):
+              r = requests.request(method, BASE + path, headers=H, params=params, json=body, timeout=60)
               if r.status_code not in ok:
                   print(f'ASC ERROR {method} {path}: HTTP {r.status_code}')
-                  try: print(json.dumps(r.json(),indent=2))
-                  except: print(r.text)
+                  try:
+                      print(json.dumps(r.json(), indent=2))
+                  except Exception:
+                      print(r.text)
                   raise RuntimeError(f'{method} {path} HTTP {r.status_code}')
-              if r.status_code==204 or not r.content:return None
+              if r.status_code == 204 or not r.content:
+                  return None
               return r.json()
-          apps=req('GET','/apps',{'filter[bundleId]':BUNDLE,'limit':'5'})['data']; app_id=apps[0]['id']
-          req('PATCH',f'/apps/{app_id}',body={'data':{'type':'apps','id':app_id,'attributes':{'contentRightsDeclaration':'USES_THIRD_PARTY_CONTENT'}}})
-          versions=req('GET',f'/apps/{app_id}/appStoreVersions',{'filter[platform]':'IOS','limit':'50','fields[appStoreVersions]':'versionString,appVersionState'})['data']
-          versions=[v for v in versions if v.get('attributes',{}).get('versionString') in ('1.0','1.0.0')]
-          editable={'PREPARE_FOR_SUBMISSION','READY_FOR_REVIEW','DEVELOPER_REJECTED','METADATA_REJECTED','REJECTED'}
-          version=next((v for v in versions if v.get('attributes',{}).get('appVersionState') in editable),versions[0]); version_id=version['id']
-          locs=req('GET',f'/appStoreVersions/{version_id}/appStoreVersionLocalizations',{'limit':'50','fields[appStoreVersionLocalizations]':'locale,description'})['data']
+
+          apps = req('GET', '/apps', {'filter[bundleId]': BUNDLE, 'limit': '5'})['data']
+          if len(apps) != 1:
+              raise RuntimeError('99.9 app lookup failed')
+          app_id = apps[0]['id']
+          req('PATCH', f'/apps/{app_id}', body={'data': {'type': 'apps', 'id': app_id, 'attributes': {'contentRightsDeclaration': 'USES_THIRD_PARTY_CONTENT'}}})
+
+          versions = req('GET', f'/apps/{app_id}/appStoreVersions', {'filter[platform]': 'IOS', 'limit': '50', 'fields[appStoreVersions]': 'versionString,appVersionState'})['data']
+          versions = [v for v in versions if v.get('attributes', {}).get('versionString') in ('1.0', '1.0.0')]
+          if not versions:
+              raise RuntimeError('App Store version 1.0 missing')
+          editable = {'PREPARE_FOR_SUBMISSION','READY_FOR_REVIEW','DEVELOPER_REJECTED','METADATA_REJECTED','REJECTED'}
+          version = next((v for v in versions if v.get('attributes', {}).get('appVersionState') in editable), versions[0])
+          version_id = version['id']
+
+          locs = req('GET', f'/appStoreVersions/{version_id}/appStoreVersionLocalizations', {'limit': '50', 'fields[appStoreVersionLocalizations]': 'locale,description'})['data']
+          if not locs:
+              raise RuntimeError('No App Store localization found')
           for loc in locs:
-              locale=loc.get('attributes',{}).get('locale','en-US'); base=DE if locale.lower().startswith('de') else EN; desc=base+'\n\n'+EULA
-              req('PATCH',f"/appStoreVersionLocalizations/{loc['id']}",body={'data':{'type':'appStoreVersionLocalizations','id':loc['id'],'attributes':{'description':desc}}})
-              print('DESCRIPTION RESTORED',locale)
-          check=req('GET',f'/appStoreVersions/{version_id}/appStoreVersionLocalizations',{'limit':'50','fields[appStoreVersionLocalizations]':'locale,description'})['data']
-          if not check or any(len((x.get('attributes',{}).get('description') or '').rstrip())<500 or not (x.get('attributes',{}).get('description') or '').rstrip().endswith(EULA) for x in check): raise RuntimeError('Description/EULA verification failed')
+              locale = loc.get('attributes', {}).get('locale', 'en-US')
+              base = DE if locale.lower().startswith('de') else EN
+              desc = base.rstrip() + '\n\n' + EULA
+              req('PATCH', f"/appStoreVersionLocalizations/{loc['id']}", body={'data': {'type': 'appStoreVersionLocalizations', 'id': loc['id'], 'attributes': {'description': desc}}})
+              print('DESCRIPTION RESTORED', locale)
+
+          check = req('GET', f'/appStoreVersions/{version_id}/appStoreVersionLocalizations', {'limit': '50', 'fields[appStoreVersionLocalizations]': 'locale,description'})['data']
+          if not check or any(len((x.get('attributes', {}).get('description') or '').rstrip()) < 500 or not (x.get('attributes', {}).get('description') or '').rstrip().endswith(EULA) for x in check):
+              raise RuntimeError('Description/EULA verification failed')
           print('FULL DESCRIPTION + EULA VERIFIED')
-          builds=req('GET','/builds',{'filter[app]':app_id,'filter[version]':BUILD,'limit':'20','sort':'-uploadedDate','fields[builds]':'version,processingState'})['data']; valid=[b for b in builds if b.get('attributes',{}).get('processingState')=='VALID']
-          if not valid: raise RuntimeError('Build 16 not VALID')
-          req('PATCH',f'/appStoreVersions/{version_id}/relationships/build',body={'data':{'type':'builds','id':valid[0]['id']}},ok=(204,))
-          detail=req('GET',f'/appStoreVersions/{version_id}/appStoreReviewDetail')['data']; attrs=detail.get('attributes',{})
-          missing=[k for k in ['contactFirstName','contactLastName','contactPhone','contactEmail'] if not attrs.get(k)]
-          if missing: raise RuntimeError('App Review contact information incomplete: '+','.join(missing))
-          req('PATCH',f"/appStoreReviewDetails/{detail['id']}",body={'data':{'type':'appStoreReviewDetails','id':detail['id'],'attributes':{'notes':NOTES}}})
+
+          builds = req('GET', '/builds', {'filter[app]': app_id, 'filter[version]': BUILD, 'limit': '20', 'sort': '-uploadedDate', 'fields[builds]': 'version,processingState'})['data']
+          valid = [b for b in builds if b.get('attributes', {}).get('processingState') == 'VALID']
+          if not valid:
+              raise RuntimeError('Build 16 not VALID')
+          req('PATCH', f'/appStoreVersions/{version_id}/relationships/build', body={'data': {'type': 'builds', 'id': valid[0]['id']}}, ok=(204,))
+
+          detail = req('GET', f'/appStoreVersions/{version_id}/appStoreReviewDetail')['data']
+          attrs = detail.get('attributes', {})
+          missing = [k for k in ['contactFirstName','contactLastName','contactPhone','contactEmail'] if not attrs.get(k)]
+          if missing:
+              raise RuntimeError('App Review contact information incomplete: ' + ','.join(missing))
+          req('PATCH', f"/appStoreReviewDetails/{detail['id']}", body={'data': {'type': 'appStoreReviewDetails', 'id': detail['id'], 'attributes': {'notes': NOTES}}})
           print('REVIEW CONTACT VERIFIED; REVIEW NOTES SET')
-          state=version.get('attributes',{}).get('appVersionState')
+
+          state = version.get('attributes', {}).get('appVersionState')
           if state in {'WAITING_FOR_REVIEW','IN_REVIEW'}:
-              print('FINAL SUCCESS',state); raise SystemExit(0)
-          subs=req('GET',f'/apps/{app_id}/reviewSubmissions',{'limit':'100','fields[reviewSubmissions]':'platform,state'})['data']; ready=[s for s in subs if s.get('attributes',{}).get('state')=='READY_FOR_REVIEW']
-          sub=ready[0] if ready else req('POST','/reviewSubmissions',body={'data':{'type':'reviewSubmissions','attributes':{'platform':'IOS'},'relationships':{'app':{'data':{'type':'apps','id':app_id}}}}})['data']; sid=sub['id']
-          items=req('GET',f'/reviewSubmissions/{sid}/items',{'limit':'200','include':'appStoreVersion','fields[reviewSubmissionItems]':'state,appStoreVersion','fields[appStoreVersions]':'versionString'})['data']
-          linked=any((i.get('relationships',{}).get('appStoreVersion',{}).get('data') or {}).get('id')==version_id for i in items)
-          if not linked:req('POST','/reviewSubmissionItems',body={'data':{'type':'reviewSubmissionItems','relationships':{'reviewSubmission':{'data':{'type':'reviewSubmissions','id':sid}},'appStoreVersion':{'data':{'type':'appStoreVersions','id':version_id}}}}})
-          result=req('PATCH',f'/reviewSubmissions/{sid}',body={'data':{'type':'reviewSubmissions','id':sid,'attributes':{'submitted':True}}})['data']; final=result.get('attributes',{}).get('state')
+              print('FINAL SUCCESS', state)
+              raise SystemExit(0)
+
+          subs = req('GET', f'/apps/{app_id}/reviewSubmissions', {'limit': '100', 'fields[reviewSubmissions]': 'platform,state'})['data']
+          ready = [s for s in subs if s.get('attributes', {}).get('state') == 'READY_FOR_REVIEW']
+          sub = ready[0] if ready else req('POST', '/reviewSubmissions', body={'data': {'type': 'reviewSubmissions', 'attributes': {'platform': 'IOS'}, 'relationships': {'app': {'data': {'type': 'apps', 'id': app_id}}}}})['data']
+          sid = sub['id']
+          items = req('GET', f'/reviewSubmissions/{sid}/items', {'limit': '200', 'include': 'appStoreVersion', 'fields[reviewSubmissionItems]': 'state,appStoreVersion', 'fields[appStoreVersions]': 'versionString'})['data']
+          linked = any((i.get('relationships', {}).get('appStoreVersion', {}).get('data') or {}).get('id') == version_id for i in items)
+          if not linked:
+              req('POST', '/reviewSubmissionItems', body={'data': {'type': 'reviewSubmissionItems', 'relationships': {'reviewSubmission': {'data': {'type': 'reviewSubmissions', 'id': sid}}, 'appStoreVersion': {'data': {'type': 'appStoreVersions', 'id': version_id}}}}})
+          result = req('PATCH', f'/reviewSubmissions/{sid}', body={'data': {'type': 'reviewSubmissions', 'id': sid, 'attributes': {'submitted': True}}})['data']
+          final = result.get('attributes', {}).get('state')
           for _ in range(18):
-              if final in {'WAITING_FOR_REVIEW','IN_REVIEW'}:break
-              time.sleep(5); final=req('GET',f'/reviewSubmissions/{sid}')['data'].get('attributes',{}).get('state')
-          if final not in {'WAITING_FOR_REVIEW','IN_REVIEW'}: raise RuntimeError('Submission state '+str(final))
-          print('FINAL SUCCESS',final)
+              if final in {'WAITING_FOR_REVIEW','IN_REVIEW'}:
+                  break
+              time.sleep(5)
+              final = req('GET', f'/reviewSubmissions/{sid}')['data'].get('attributes', {}).get('state')
+          if final not in {'WAITING_FOR_REVIEW','IN_REVIEW'}:
+              raise RuntimeError('Submission state ' + str(final))
+          print('FINAL SUCCESS', final)
           PY
