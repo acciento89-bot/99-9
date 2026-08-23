@@ -74,6 +74,8 @@ func _cancel_ios_pending(code: String, message: String) -> void:
         iap.call("_cancel_pending_ios_async", code, message)
 
 func _exit_tree() -> void:
+    if OS.get_name() != "iOS":
+        return
     _ios_terminating = true
     _ios_suspended = true
     store_ready = false
