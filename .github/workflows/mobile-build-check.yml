@@ -88,6 +88,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          grep -Fq 'GodotIapPlugin="*res://addons/godot-iap/godot_iap_ios_safe.gd"' project.godot || { echo 'Safe IAP autoload is not configured'; exit 1; }
+          grep -Fq 'add_autoload_singleton(AUTOLOAD_NAME, "res://addons/godot-iap/godot_iap_ios_safe.gd")' addons/godot-iap/godot_iap_plugin.gd || { echo 'Editor plugin would restore unsafe IAP autoload'; exit 1; }
           "$GODOT" --headless --editor --path . --quit
           mkdir -p build/ios
           "$GODOT" --headless --path . --export-release "iOS Playtest" build/ios/NineNine.zip
@@ -96,7 +98,9 @@ jobs:
           chmod +x addons/godot-iap/scripts/fix_ios_embed.sh
           IOS_EXPORT_DIR="$PWD/build/ios" ./addons/godot-iap/scripts/fix_ios_embed.sh
           grep -q 'GodotIap.framework' build/ios/NineNine.xcodeproj/project.pbxproj
-          grep -R -q 'ca-app-pub-3940256099942544~1458002511' build/ios || { echo 'AdMob iOS demo App ID missing from export'; exit 1; }
+          IOS_ADMOB_APP_ID=$(sed -n 's/^general\/ios\/app_id="\([^"]*\)"/\1/p' project.godot | head -n1)
+          test -n "$IOS_ADMOB_APP_ID" || { echo 'AdMob iOS App ID missing from project.godot'; exit 1; }
+          grep -R -Fq "$IOS_ADMOB_APP_ID" build/ios || { echo "Configured AdMob iOS App ID missing from export: $IOS_ADMOB_APP_ID"; exit 1; }
           grep -R -q 'GoogleMobileAds' build/ios || { echo 'Google Mobile Ads SPM integration missing'; exit 1; }
           xcodebuild -project build/ios/NineNine.xcodeproj -list -json > "$RUNNER_TEMP/xcode.json"
           SCHEME=$(python3 - <<'PY2'
