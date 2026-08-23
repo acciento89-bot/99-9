@@ -2,12 +2,9 @@ name: 99.9 Build 16 TestFlight
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - ios/storekit-connection-fix
+  pull_request:
     paths:
       - '.github/workflows/ios-build16-testflight.yml'
-      - 'export_presets.cfg'
 
 permissions:
   contents: read
