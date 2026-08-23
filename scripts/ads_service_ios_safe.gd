@@ -1,10 +1,10 @@
 extends "res://scripts/ads_service.gd"
 
 # iOS release-safe AdMob/UMP bridge.
-# Build 12's crash log shows GDScriptLambdaSelfCallable being destroyed from
-# GDScriptLanguage::finish(). The previous implementation kept several
-# anonymous self lambdas alive inside Google Mobile Ads and UMP callback
-# objects. On iOS all callback slots are now ordinary named Callables.
+# Build 12's crash log terminates in GDScriptLambdaSelfCallable destruction.
+# Poing AdMob listener/ad objects ship with anonymous GDScript lambdas as
+# default callback values. Every callback slot that survives beyond creation is
+# replaced here with a named Callable while Godot is fully alive.
 
 func show_privacy_options() -> void:
     if _shutting_down or _ads_removed or OS.get_name() != "iOS":
@@ -115,11 +115,10 @@ func _load_interstitial() -> void:
     if _shutting_down or _ads_removed or not _ads_ready or not _consent_allows_ads() or _interstitial_ad != null:
         return
 
-    var unit_id := INTERSTITIAL_IOS
     _load_callback = InterstitialAdLoadCallback.new()
     _load_callback.on_ad_failed_to_load = Callable(self, "_on_interstitial_failed_to_load")
     _load_callback.on_ad_loaded = Callable(self, "_on_interstitial_loaded")
-    InterstitialAdLoader.new().load(unit_id, AdRequest.new(), _load_callback)
+    InterstitialAdLoader.new().load(INTERSTITIAL_IOS, AdRequest.new(), _load_callback)
 
 func _on_interstitial_failed_to_load(error) -> void:
     if _shutting_down:
@@ -134,9 +133,15 @@ func _on_interstitial_failed_to_load(error) -> void:
         _retry_timer.start()
 
 func _on_interstitial_loaded(ad) -> void:
+    if ad == null:
+        return
+
+    # InterstitialAd itself owns a default anonymous `on_ad_paid` lambda.
+    # Replace it before retaining the ad so no self-lambda survives to shutdown.
+    ad.on_ad_paid = Callable(self, "_on_interstitial_paid")
+
     if _shutting_down:
-        if ad != null and ad.has_method("destroy"):
-            ad.destroy()
+        ad.destroy()
         return
     if _ads_removed:
         ad.destroy()
@@ -145,6 +150,7 @@ func _on_interstitial_loaded(ad) -> void:
         ad.destroy()
         _disable_ads_for_privacy("ADS DISABLED · CONSENT REQUIRED")
         return
+
     _interstitial_ad = ad
     _attach_full_screen_callback()
     interstitial_state_changed.emit(true)
@@ -153,11 +159,28 @@ func _attach_full_screen_callback() -> void:
     if _shutting_down or _interstitial_ad == null or _ads_removed:
         return
 
-    _full_screen_callback = FullScreenContentCallback.new()
-    _full_screen_callback.on_ad_showed_full_screen_content = Callable(self, "_on_interstitial_showed")
+    # Reuse the callback object already created by InterstitialAd and replace
+    # ALL five anonymous defaults, including clicked/impression which were
+    # previously left alive until process termination.
+    _full_screen_callback = _interstitial_ad.full_screen_content_callback
+    if _full_screen_callback == null:
+        _full_screen_callback = FullScreenContentCallback.new()
+
+    _full_screen_callback.on_ad_clicked = Callable(self, "_on_interstitial_clicked")
     _full_screen_callback.on_ad_dismissed_full_screen_content = Callable(self, "_on_interstitial_dismissed")
     _full_screen_callback.on_ad_failed_to_show_full_screen_content = Callable(self, "_on_interstitial_failed_to_show")
+    _full_screen_callback.on_ad_impression = Callable(self, "_on_interstitial_impression")
+    _full_screen_callback.on_ad_showed_full_screen_content = Callable(self, "_on_interstitial_showed")
     _interstitial_ad.full_screen_content_callback = _full_screen_callback
+
+func _on_interstitial_clicked() -> void:
+    pass
+
+func _on_interstitial_impression() -> void:
+    pass
+
+func _on_interstitial_paid(_ad_value) -> void:
+    pass
 
 func _on_interstitial_showed() -> void:
     if not _shutting_down:
@@ -197,14 +220,13 @@ func _notification(what: int) -> void:
 func _exit_tree() -> void:
     _shutting_down = true
 
-    if _initialization_listener != null:
-        _initialization_listener.on_initialization_complete = Callable()
-    if _load_callback != null:
-        _load_callback.on_ad_failed_to_load = Callable()
-        _load_callback.on_ad_loaded = Callable()
-    if _full_screen_callback != null:
-        _full_screen_callback.on_ad_showed_full_screen_content = Callable()
-        _full_screen_callback.on_ad_dismissed_full_screen_content = Callable()
-        _full_screen_callback.on_ad_failed_to_show_full_screen_content = Callable()
+    # These are named Callables now (not GDScript lambdas). Release them while
+    # the scene is still alive; do not invoke native destroy during teardown.
+    _initialization_listener = null
+    _load_callback = null
+    _full_screen_callback = null
+
+    if _interstitial_ad != null:
+        _interstitial_ad.on_ad_paid = Callable()
 
     super._exit_tree()
