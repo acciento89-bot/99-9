@@ -1,0 +1,203 @@
+name: 99.9 Build 16 TestFlight
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - ios/storekit-connection-fix
+    paths:
+      - '.github/workflows/ios-build16-testflight.yml'
+      - 'export_presets.cfg'
+
+permissions:
+  contents: read
+
+env:
+  GODOT_VERSION: '4.7.2'
+  GODOT_TAG: '4.7.2-stable'
+  TEAM_ID: 'TKG684N5GL'
+  BUNDLE_ID: 'de.kamilunavo.ninenine'
+  APP_VERSION: '1.0.0'
+  BUILD_NUMBER: '16'
+
+jobs:
+  testflight:
+    name: Build 16 direct TestFlight upload
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+      ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+      ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+    steps:
+      - name: Checkout 99-9
+        uses: actions/checkout@v5
+
+      - name: Verify iOS-only Build 16 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$ASC_API_KEY_ID" || { echo 'ASC_API_KEY_ID missing'; exit 1; }
+          test -n "$ASC_API_ISSUER_ID" || { echo 'ASC_API_ISSUER_ID missing'; exit 1; }
+          test -n "$ASC_API_KEY_P8" || { echo 'ASC_API_KEY_P8 missing'; exit 1; }
+          grep -Fq 'application/bundle_identifier="de.kamilunavo.ninenine"' export_presets.cfg
+          grep -Fq 'application/short_version="1.0.0"' export_presets.cfg
+          grep -Fq 'application/version="16"' export_presets.cfg
+          ! grep -Fq 'platform="Android"' export_presets.cfg
+          ! grep -R -Fq 'com.kamilunavo.game999' project.godot export_presets.cfg scripts addons || { echo 'Wrong legacy bundle id found'; exit 1; }
+          grep -Fq 'GodotIapPlugin="*res://addons/godot-iap/godot_iap_ios_safe.gd"' project.godot
+          grep -Fq 'add_autoload_singleton(AUTOLOAD_NAME, "res://addons/godot-iap/godot_iap_ios_safe.gd")' addons/godot-iap/godot_iap_plugin.gd
+          grep -R -Fq 'de.kamilunavo.ninenine.theme.neon' scripts
+          grep -R -Fq 'de.kamilunavo.ninenine.theme.gold' scripts
+          grep -R -Fq 'de.kamilunavo.ninenine.theme.aurora' scripts
+          grep -R -Fq 'de.kamilunavo.ninenine.removeads' scripts
+          grep -R -Fq 'ca-app-pub-8944085355624754~5700066119' . --exclude-dir=.git
+          grep -R -Fq 'ca-app-pub-8944085355624754/9156045067' . --exclude-dir=.git
+
+      - name: Install Godot, templates and iOS native packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/ci_install_admob.sh ios
+          curl -L --fail --retry 3 -o "$RUNNER_TEMP/godot.zip" "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_macos.universal.zip"
+          mkdir -p "$RUNNER_TEMP/godot"
+          unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP/godot"
+          GODOT="$RUNNER_TEMP/godot/Godot.app/Contents/MacOS/Godot"
+          echo "GODOT=$GODOT" >> "$GITHUB_ENV"
+          T="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$T" "$RUNNER_TEMP/templates"
+          curl -L --fail --retry 3 -o "$RUNNER_TEMP/templates.tpz" "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_export_templates.tpz"
+          unzip -q "$RUNNER_TEMP/templates.tpz" -d "$RUNNER_TEMP/templates"
+          cp -R "$RUNNER_TEMP/templates/templates/." "$T/"
+          test -f "$T/ios.zip"
+          test -d addons/godot-iap/bin/ios/GodotIap.framework
+
+      - name: Export iOS Xcode project
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$GODOT" --headless --editor --path . --quit
+          mkdir -p build/ios
+          "$GODOT" --headless --path . --export-release "iOS Playtest" build/ios/NineNine.zip
+          test -d build/ios/NineNine.xcodeproj
+          chmod +x addons/godot-iap/scripts/fix_ios_embed.sh
+          IOS_EXPORT_DIR="$PWD/build/ios" ./addons/godot-iap/scripts/fix_ios_embed.sh
+          grep -q 'GodotIap.framework' build/ios/NineNine.xcodeproj/project.pbxproj
+          grep -R -Fq 'ca-app-pub-8944085355624754~5700066119' build/ios
+          grep -R -q 'GoogleMobileAds' build/ios
+
+      - name: Prepare App Store Connect API key
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_API_KEY_ID}.p8"
+          export KEY_PATH
+          python3 - <<'PY'
+          import os
+          value = os.environ['ASC_API_KEY_P8'].replace('\\n', '\n').replace('\r\n', '\n')
+          with open(os.environ['KEY_PATH'], 'w', encoding='utf-8', newline='\n') as f:
+              f.write(value.strip() + '\n')
+          PY
+          chmod 600 "$KEY_PATH"
+          grep -q 'BEGIN PRIVATE KEY' "$KEY_PATH"
+          echo "KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Archive signed Build 16
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROJECT_PATH="$PWD/build/ios/NineNine.xcodeproj"
+          xcodebuild -project "$PROJECT_PATH" -list -json > "$RUNNER_TEMP/xcode.json"
+          SCHEME=$(python3 - <<'PY'
+          import json, os
+          data=json.load(open(os.environ['RUNNER_TEMP'] + '/xcode.json'))['project']
+          print((data.get('schemes') or data.get('targets') or [''])[0])
+          PY
+          )
+          test -n "$SCHEME"
+          ARCHIVE_PATH="$RUNNER_TEMP/NineNine.xcarchive"
+          echo "ARCHIVE_PATH=$ARCHIVE_PATH" >> "$GITHUB_ENV"
+          xcodebuild \
+            -project "$PROJECT_PATH" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$ARCHIVE_PATH" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$KEY_PATH" \
+            -authenticationKeyID "$ASC_API_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_API_ISSUER_ID" \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            CODE_SIGN_STYLE=Automatic \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_REQUIRED=YES \
+            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
+            MARKETING_VERSION="$APP_VERSION" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            archive
+          APP=$(find "$ARCHIVE_PATH/Products/Applications" -maxdepth 1 -type d -name '*.app' -print -quit)
+          test -n "$APP"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")" = "$BUNDLE_ID"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist")" = "$APP_VERSION"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")" = "$BUILD_NUMBER"
+
+      - name: Export App Store Connect IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>teamID</key><string>${TEAM_ID}</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>destination</key><string>export</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+            <key>stripSwiftSymbols</key><true/>
+          </dict>
+          </plist>
+          EOF
+          EXPORT_DIR="$RUNNER_TEMP/export"
+          mkdir -p "$EXPORT_DIR"
+          xcodebuild \
+            -exportArchive \
+            -archivePath "$ARCHIVE_PATH" \
+            -exportPath "$EXPORT_DIR" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$KEY_PATH" \
+            -authenticationKeyID "$ASC_API_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_API_ISSUER_ID"
+          IPA=$(find "$EXPORT_DIR" -maxdepth 1 -type f -name '*.ipa' -print -quit)
+          test -n "$IPA" -a -s "$IPA"
+          echo "IPA=$IPA" >> "$GITHUB_ENV"
+
+      - name: Verify signed IPA identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/ipa-check"
+          mkdir -p "$RUNNER_TEMP/ipa-check"
+          unzip -q "$IPA" -d "$RUNNER_TEMP/ipa-check"
+          APP=$(find "$RUNNER_TEMP/ipa-check/Payload" -maxdepth 1 -type d -name '*.app' -print -quit)
+          test -n "$APP"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")" = "$BUNDLE_ID"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist")" = "$APP_VERSION"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")" = "$BUILD_NUMBER"
+          codesign --verify --deep --strict "$APP"
+
+      - name: Upload Build 16 to TestFlight
+        shell: bash
+        run: |
+          set -euo pipefail
+          set -o pipefail
+          xcrun altool --upload-app \
+            --file "$IPA" \
+            --type ios \
+            --apiKey "$ASC_API_KEY_ID" \
+            --apiIssuer "$ASC_API_ISSUER_ID" \
+            --verbose 2>&1 | tee "$RUNNER_TEMP/testflight-upload.log"
+          echo 'Build 16 upload command completed successfully.'
