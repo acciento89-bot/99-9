@@ -7,20 +7,66 @@ on:
 permissions:
   contents: read
 
+env:
+  GODOT_TAG: '4.7.2-stable'
+
 jobs:
   appstore-final-submit:
-    name: Finalize App Store Connect and submit Build 16
+    name: Complete App Store Connect and submit Build 16
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
       ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
     steps:
-      - uses: actions/checkout@v5
-      - name: Install ASC dependencies
-        run: python3 -m pip install --quiet pyjwt cryptography requests
-      - name: Fill review contact, verify metadata, and submit
+      - name: Checkout 99-9
+        uses: actions/checkout@v5
+
+      - name: Install tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyjwt cryptography requests pillow
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb imagemagick >/dev/null
+
+      - name: Capture real Build 16 UI at iPad 12.9 size
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/ci_install_admob.sh ios
+          curl -L --fail --retry 3 -o "$RUNNER_TEMP/godot.zip" "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_linux.x86_64.zip"
+          unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP"
+          GODOT="$RUNNER_TEMP/Godot_v${GODOT_TAG}_linux.x86_64"
+          chmod +x "$GODOT"
+          Xvfb :99 -screen 0 2048x2732x24 -ac >/tmp/xvfb.log 2>&1 &
+          XVFB_PID=$!
+          export DISPLAY=:99
+          sleep 2
+          "$GODOT" --path . --resolution 2048x2732 --fullscreen --rendering-method gl_compatibility >/tmp/godot-capture.log 2>&1 &
+          GAME_PID=$!
+          sleep 8
+          import -display :99 -window root "$RUNNER_TEMP/99-9-ipad-129.png"
+          kill "$GAME_PID" 2>/dev/null || true
+          kill "$XVFB_PID" 2>/dev/null || true
+          export SCREENSHOT="$RUNNER_TEMP/99-9-ipad-129.png"
+          python3 - <<'PY'
+          from PIL import Image, ImageStat
+          import os
+          p=os.environ['SCREENSHOT']
+          im=Image.open(p).convert('RGB')
+          if im.size != (2048,2732):
+              im=im.resize((2048,2732),Image.Resampling.LANCZOS)
+              im.save(p,'PNG',optimize=True)
+          stat=ImageStat.Stat(im)
+          if max(stat.mean) < 1.0:
+              raise SystemExit('Captured screenshot is blank')
+          print('REAL IPAD SCREENSHOT READY', im.size, os.path.getsize(p))
+          PY
+          echo "SCREENSHOT=$RUNNER_TEMP/99-9-ipad-129.png" >> "$GITHUB_ENV"
+
+      - name: Finish metadata, upload iPad screenshot, submit Build 16
         shell: bash
         run: |
           set -euo pipefail
@@ -31,24 +77,32 @@ jobs:
           BASE='https://api.appstoreconnect.apple.com/v1'
           BUNDLE='de.kamilunavo.ninenine'
           BUILD='16'
+          SCREENSHOT=os.environ['SCREENSHOT']
+          DISPLAY_TYPE='APP_IPAD_PRO_3GEN_129'
           EULA='Terms of Use (EULA): https://www.apple.com/legal/internet-services/itunes/dev/stdeula/'
+          SUPPORT='https://www.kamilunavo.com/'
+          COPYRIGHT='2026 Piotr Kaminski - Kamilunavo'
+          KEYWORDS_EN='game,precision,reaction,percent,highscore,leaderboard,streak,casual,one tap'
+          KEYWORDS_DE='spiel,präzision,reaktion,prozent,highscore,bestenliste,streak,casual,one tap'
           NOTES='99.9% is a one-tap precision game and does not require an account or login.\n\nReview path:\n1. Tap PLAY.\n2. Tap once to start the percentage run and tap again to stop it.\n3. Reaching 99.900% or higher continues the streak.\n4. WORLD LEADERBOARD shows best-hit and longest-streak rankings using a locally generated player ID and a user-selected display name.\n5. SETTINGS contains player-name settings plus purchase and restore options.\n\nOptional StoreKit in-app purchases unlock visual themes and Remove Ads. Google Mobile Ads/UMP is used for advertising and consent. No external payment method is used.'
 
           kid=os.environ['ASC_KEY_ID']; issuer=os.environ['ASC_ISSUER_ID']; raw=os.environ['ASC_PRIVATE_KEY_B64']
-          key=base64.b64decode(raw).decode(); now=int(time.time())
+          if not kid or not issuer or not raw:
+              raise RuntimeError('ASC credentials missing')
+          key=base64.b64decode(raw).decode('utf-8')
+          now=int(time.time())
           token=jwt.encode({'iss':issuer,'iat':now,'exp':now+1100,'aud':'appstoreconnect-v1'},key,algorithm='ES256',headers={'kid':kid,'typ':'JWT'})
           H={'Authorization':f'Bearer {token}','Content-Type':'application/json'}
 
-          def req(method,path,params=None,body=None,ok=(200,201,204),allow=()):
+          def req(method,path,params=None,body=None,ok=(200,201,204)):
               r=requests.request(method,BASE+path,headers=H,params=params,json=body,timeout=60)
-              if r.status_code in allow:
-                  return None
               if r.status_code not in ok:
                   print(f'ASC ERROR {method} {path}: HTTP {r.status_code}')
                   try: print(json.dumps(r.json(),indent=2))
                   except Exception: print(r.text)
                   raise RuntimeError(f'{method} {path} HTTP {r.status_code}')
-              if r.status_code==204 or not r.content: return None
+              if r.status_code==204 or not r.content:
+                  return None
               return r.json()
 
           apps=req('GET','/apps',{'filter[bundleId]':BUNDLE,'limit':'5'})['data']
@@ -62,55 +116,83 @@ jobs:
           editable={'PREPARE_FOR_SUBMISSION','READY_FOR_REVIEW','DEVELOPER_REJECTED','METADATA_REJECTED','REJECTED'}
           version=next((v for v in versions if v.get('attributes',{}).get('appVersionState') in editable),versions[0])
           version_id=version['id']
+          state=version.get('attributes',{}).get('appVersionState')
+          print('VERSION',version_id,state)
 
-          locs=req('GET',f'/appStoreVersions/{version_id}/appStoreVersionLocalizations',{'limit':'50','fields[appStoreVersionLocalizations]':'locale,description'})['data']
-          if not locs: raise RuntimeError('No localization found')
+          req('PATCH',f'/appStoreVersions/{version_id}',body={'data':{'type':'appStoreVersions','id':version_id,'attributes':{'copyright':COPYRIGHT}}})
+          print('COPYRIGHT SET')
+
+          locs=req('GET',f'/appStoreVersions/{version_id}/appStoreVersionLocalizations',{'limit':'50','fields[appStoreVersionLocalizations]':'locale,description,keywords,supportUrl'})['data']
+          if not locs: raise RuntimeError('No App Store localization found')
           for loc in locs:
-              desc=(loc.get('attributes',{}).get('description') or '').rstrip()
+              attrs=loc.get('attributes',{})
+              locale=attrs.get('locale','en-US')
+              desc=(attrs.get('description') or '').rstrip()
               if len(desc)<500 or not desc.endswith(EULA):
-                  raise RuntimeError('Description is not fully restored with EULA at end')
-          print('DESCRIPTION + EULA VERIFIED')
+                  raise RuntimeError('Full description + EULA verification failed for '+locale)
+              keywords=KEYWORDS_DE if locale.lower().startswith('de') else KEYWORDS_EN
+              req('PATCH',f"/appStoreVersionLocalizations/{loc['id']}",body={'data':{'type':'appStoreVersionLocalizations','id':loc['id'],'attributes':{'keywords':keywords,'supportUrl':SUPPORT}}})
+              print('KEYWORDS + SUPPORT SET',locale)
 
           builds=req('GET','/builds',{'filter[app]':app_id,'filter[version]':BUILD,'limit':'20','sort':'-uploadedDate','fields[builds]':'version,processingState'})['data']
           valid=[b for b in builds if b.get('attributes',{}).get('processingState')=='VALID']
           if not valid: raise RuntimeError('Build 16 not VALID')
           req('PATCH',f'/appStoreVersions/{version_id}/relationships/build',body={'data':{'type':'builds','id':valid[0]['id']}},ok=(204,))
+          print('BUILD 16 ATTACHED')
 
           detail=req('GET',f'/appStoreVersions/{version_id}/appStoreReviewDetail')['data']
           attrs=detail.get('attributes',{})
-          fields=['contactFirstName','contactLastName','contactPhone','contactEmail']
-          missing=[k for k in fields if not attrs.get(k)]
-          if missing:
-              all_apps=req('GET','/apps',{'limit':'200'})['data']
-              donor=None
-              for app in all_apps:
-                  aid=app['id']
-                  if aid==app_id: continue
-                  try:
-                      ovs=req('GET',f'/apps/{aid}/appStoreVersions',{'filter[platform]':'IOS','limit':'50','fields[appStoreVersions]':'versionString'})['data']
-                  except Exception:
-                      continue
-                  for ov in ovs:
-                      r=requests.get(BASE+f"/appStoreVersions/{ov['id']}/appStoreReviewDetail",headers=H,timeout=30)
-                      if r.status_code!=200: continue
-                      od=(r.json().get('data') or {}).get('attributes',{})
-                      if all(od.get(k) for k in fields):
-                          donor={k:od[k] for k in fields}
-                          break
-                  if donor: break
-              if not donor: raise RuntimeError('No existing complete App Review contact found in other apps')
-              patch=dict(donor); patch['notes']=NOTES
-              req('PATCH',f"/appStoreReviewDetails/{detail['id']}",body={'data':{'type':'appStoreReviewDetails','id':detail['id'],'attributes':patch}})
-              print('REVIEW CONTACT COPIED FROM EXISTING APP; NOTES SET')
+          missing=[k for k in ['contactFirstName','contactLastName','contactPhone','contactEmail'] if not attrs.get(k)]
+          if missing: raise RuntimeError('Review contact unexpectedly missing: '+','.join(missing))
+          req('PATCH',f"/appStoreReviewDetails/{detail['id']}",body={'data':{'type':'appStoreReviewDetails','id':detail['id'],'attributes':{'notes':NOTES}}})
+          print('REVIEW CONTACT + NOTES VERIFIED')
+
+          primary_loc=next((x for x in locs if str(x.get('attributes',{}).get('locale','')).lower().startswith('en')),locs[0])
+          loc_id=primary_loc['id']
+          sets=req('GET',f'/appStoreVersionLocalizations/{loc_id}/appScreenshotSets',{'limit':'50','fields[appScreenshotSets]':'screenshotDisplayType'})['data']
+          screenshot_set=next((s for s in sets if s.get('attributes',{}).get('screenshotDisplayType')==DISPLAY_TYPE),None)
+          if screenshot_set is None:
+              screenshot_set=req('POST','/appScreenshotSets',body={'data':{'type':'appScreenshotSets','attributes':{'screenshotDisplayType':DISPLAY_TYPE},'relationships':{'appStoreVersionLocalization':{'data':{'type':'appStoreVersionLocalizations','id':loc_id}}}}})['data']
+              print('IPAD SCREENSHOT SET CREATED')
+          set_id=screenshot_set['id']
+
+          shots=req('GET',f'/appScreenshotSets/{set_id}/appScreenshots',{'limit':'50','fields[appScreenshots]':'fileName,assetDeliveryState'})['data']
+          complete=[]
+          for s in shots:
+              delivery=(s.get('attributes',{}).get('assetDeliveryState') or {}).get('state')
+              if delivery in ('COMPLETE','UPLOAD_COMPLETE'):
+                  complete.append(s)
+          if complete:
+              print('IPAD SCREENSHOT ALREADY PRESENT',complete[0]['id'])
           else:
-              req('PATCH',f"/appStoreReviewDetails/{detail['id']}",body={'data':{'type':'appStoreReviewDetails','id':detail['id'],'attributes':{'notes':NOTES}}})
-              print('REVIEW CONTACT VERIFIED; NOTES SET')
+              size=os.path.getsize(SCREENSHOT)
+              name='99-9-ipad-pro-129.png'
+              shot=req('POST','/appScreenshots',body={'data':{'type':'appScreenshots','attributes':{'fileName':name,'fileSize':size},'relationships':{'appScreenshotSet':{'data':{'type':'appScreenshotSets','id':set_id}}}}})['data']
+              shot_id=shot['id']
+              ops=shot.get('attributes',{}).get('uploadOperations') or []
+              if not ops: raise RuntimeError('Apple returned no screenshot upload operations')
+              with open(SCREENSHOT,'rb') as fh:
+                  for op in ops:
+                      offset=int(op.get('offset',0)); length=int(op.get('length',size))
+                      fh.seek(offset); chunk=fh.read(length)
+                      upload_headers={h['name']:h['value'] for h in op.get('requestHeaders',[])}
+                      r=requests.request(op.get('method','PUT'),op['url'],headers=upload_headers,data=chunk,timeout=120)
+                      if r.status_code < 200 or r.status_code >= 300:
+                          raise RuntimeError('Screenshot binary upload failed HTTP '+str(r.status_code))
+              req('PATCH',f'/appScreenshots/{shot_id}',body={'data':{'type':'appScreenshots','id':shot_id,'attributes':{'uploaded':True}}})
+              delivery=None
+              for _ in range(30):
+                  time.sleep(2)
+                  current=req('GET',f'/appScreenshots/{shot_id}')['data']
+                  delivery=(current.get('attributes',{}).get('assetDeliveryState') or {}).get('state')
+                  print('SCREENSHOT STATE',delivery)
+                  if delivery in ('COMPLETE','UPLOAD_COMPLETE'): break
+                  if delivery in ('FAILED','ERROR'): raise RuntimeError('Apple screenshot processing failed')
+              if delivery not in ('COMPLETE','UPLOAD_COMPLETE'):
+                  raise RuntimeError('Screenshot did not finish processing: '+str(delivery))
+              print('IPAD SCREENSHOT UPLOADED',shot_id)
 
-          detail2=req('GET',f'/appStoreVersions/{version_id}/appStoreReviewDetail')['data']
-          if not all(detail2.get('attributes',{}).get(k) for k in fields): raise RuntimeError('Review contact verification failed')
-          if not detail2.get('attributes',{}).get('notes'): raise RuntimeError('Review notes verification failed')
-
-          state=version.get('attributes',{}).get('appVersionState')
+          state=req('GET',f'/appStoreVersions/{version_id}')['data'].get('attributes',{}).get('appVersionState')
           if state in {'WAITING_FOR_REVIEW','IN_REVIEW'}:
               print('FINAL SUCCESS',state)
               raise SystemExit(0)
@@ -123,12 +205,15 @@ jobs:
           linked=any((i.get('relationships',{}).get('appStoreVersion',{}).get('data') or {}).get('id')==version_id for i in items)
           if not linked:
               req('POST','/reviewSubmissionItems',body={'data':{'type':'reviewSubmissionItems','relationships':{'reviewSubmission':{'data':{'type':'reviewSubmissions','id':sid}},'appStoreVersion':{'data':{'type':'appStoreVersions','id':version_id}}}}})
+              print('VERSION ADDED TO REVIEW SUBMISSION')
           result=req('PATCH',f'/reviewSubmissions/{sid}',body={'data':{'type':'reviewSubmissions','id':sid,'attributes':{'submitted':True}}})['data']
           final=result.get('attributes',{}).get('state')
-          for _ in range(18):
+          for _ in range(24):
               if final in {'WAITING_FOR_REVIEW','IN_REVIEW'}: break
-              time.sleep(5)
+              time.sleep(3)
               final=req('GET',f'/reviewSubmissions/{sid}')['data'].get('attributes',{}).get('state')
-          if final not in {'WAITING_FOR_REVIEW','IN_REVIEW'}: raise RuntimeError('Submission state '+str(final))
+              print('REVIEW STATE',final)
+          if final not in {'WAITING_FOR_REVIEW','IN_REVIEW'}:
+              raise RuntimeError('Submission state '+str(final))
           print('FINAL SUCCESS',final)
           PY
