@@ -1,3 +1,4 @@
+# Final 99.9 App Store submission workflow
 name: 99.9 Final App Store Submit
 
 on:
@@ -110,7 +111,6 @@ Choose your player name and customize the look with additional themes. Optional 
           app_id=app[0]['id']
           print('APP',app_id,BUNDLE)
 
-          # Required content-rights declaration. 99.9 displays third-party ad content via AdMob.
           req('PATCH',f'/apps/{app_id}',body={'data':{'type':'apps','id':app_id,'attributes':{'contentRightsDeclaration':'USES_THIRD_PARTY_CONTENT'}}})
           print('Content rights set.')
 
@@ -124,7 +124,6 @@ Choose your player name and customize the look with additional themes. Optional 
           version_id=version['id']; state=version.get('attributes',{}).get('appVersionState')
           print('VERSION',version_id,state)
 
-          # If already submitted by an earlier automation, leave it alone only if descriptions are already correct.
           locs=req('GET',f'/appStoreVersions/{version_id}/appStoreVersionLocalizations',{
               'limit':'50','fields[appStoreVersionLocalizations]':'locale,description'
           })['data']
@@ -134,7 +133,6 @@ Choose your player name and customize the look with additional themes. Optional 
               base=DE if str(locale).lower().startswith('de') else EN
               return base.rstrip()+'\n\n'+EULA_LINE
 
-          # Repair the accidental EULA-only description and enforce EULA as the final line.
           for loc in locs:
               lid=loc['id']; locale=loc.get('attributes',{}).get('locale','en-US')
               desc=description_for(locale)
@@ -163,8 +161,6 @@ Choose your player name and customize the look with additional themes. Optional 
           req('PATCH',f'/appStoreVersions/{version_id}/relationships/build',body={'data':{'type':'builds','id':build_id}},ok=(204,))
           print('BUILD ATTACHED',build_id)
 
-          # App Privacy must be published. Apple exposes validation through submission errors, not a writable public endpoint.
-          # Create/use a READY_FOR_REVIEW submission and add the version; this is the authoritative metadata gate.
           submissions=req('GET',f'/apps/{app_id}/reviewSubmissions',{
               'limit':'100','fields[reviewSubmissions]':'platform,submittedDate,state'
           })['data']
@@ -205,7 +201,6 @@ Choose your player name and customize the look with additional themes. Optional 
                   }})
                   print('VERSION ADDED TO SUBMISSION')
 
-              # No review contact information and no review notes are added by this automation.
               result=req('PATCH',f'/reviewSubmissions/{submission_id}',body={'data':{
                   'type':'reviewSubmissions','id':submission_id,'attributes':{'submitted':True}
               }})['data']
