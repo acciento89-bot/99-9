@@ -1,0 +1,8 @@
+bundle=de.kamilunavo.ninenine
+build=16
+build_valid=true
+content_rights=USES_THIRD_PARTY_CONTENT
+app_price_free=true
+eula_at_description_end=true
+app_version_state=PREPARE_FOR_SUBMISSION
+active_review_states=READY_FOR_REVIEW
