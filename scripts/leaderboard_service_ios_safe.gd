@@ -2,18 +2,25 @@ extends "res://scripts/leaderboard_service.gd"
 
 # iOS termination-safe network layer. No anonymous GDScript Callables are kept
 # alive by HTTPRequest signals while the application is being terminated.
+# Non-iOS platforms delegate to the original implementation unchanged.
 
 const ACTION_LOAD := "load"
 const ACTION_SUBMIT := "submit"
 const ACTION_NAME := "name"
 
 func load_leaderboard(mode: String, player_id: String, limit: int = 25) -> void:
+    if OS.get_name() != "iOS":
+        super.load_leaderboard(mode, player_id, limit)
+        return
     var safe_mode := "streak" if mode == "streak" else "hit"
     var safe_limit := clampi(limit, 1, 100)
     var url := "%s?mode=%s&limit=%d&player_id=%s" % [FUNCTION_URL, safe_mode, safe_limit, player_id.uri_encode()]
     _request_ios_safe(url, HTTPClient.METHOD_GET, "", ACTION_LOAD, safe_mode)
 
 func submit_score(player_id: String, score_milli: int, platform: String, app_version: String) -> void:
+    if OS.get_name() != "iOS":
+        super.submit_score(player_id, score_milli, platform, app_version)
+        return
     var body := JSON.stringify({
         "action": "submit_score",
         "player_id": player_id,
@@ -24,6 +31,9 @@ func submit_score(player_id: String, score_milli: int, platform: String, app_ver
     _request_ios_safe(FUNCTION_URL, HTTPClient.METHOD_POST, body, ACTION_SUBMIT, "")
 
 func save_name(player_id: String, display_name: String) -> void:
+    if OS.get_name() != "iOS":
+        super.save_name(player_id, display_name)
+        return
     var body := JSON.stringify({
         "action": "set_name",
         "player_id": player_id,
@@ -93,6 +103,8 @@ func _emit_ios_request_failure(action: String, payload: Variant) -> void:
             name_save_failed.emit(_error_message(payload, "Name could not be saved"))
 
 func _exit_tree() -> void:
+    if OS.get_name() != "iOS":
+        return
     for child in get_children():
         if child is HTTPRequest:
             child.cancel_request()
