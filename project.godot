@@ -14,7 +14,7 @@ config/features=PackedStringArray("4.7", "Mobile")
 
 [autoload]
 
-GodotIapPlugin="*res://addons/godot-iap/godot_iap.gd"
+GodotIapPlugin="*res://addons/godot-iap/godot_iap_ios_safe.gd"
 
 [admob]
 
