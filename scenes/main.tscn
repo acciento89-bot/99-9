@@ -3,7 +3,7 @@
 [ext_resource type="Script" path="res://scripts/main_v10.gd" id="1_main"]
 [ext_resource type="Script" path="res://scripts/leaderboard_service.gd" id="2_leaderboard"]
 [ext_resource type="Script" path="res://scripts/iap_service.gd" id="3_iap"]
-[ext_resource type="Script" path="res://scripts/ads_service.gd" id="4_ads"]
+[ext_resource type="Script" path="res://scripts/ads_service_ios_safe.gd" id="4_ads"]
 
 [node name="Main" type="Control"]
 layout_mode = 3
