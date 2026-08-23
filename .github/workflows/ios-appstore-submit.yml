@@ -38,7 +38,7 @@ jobs:
         run: |
           python3 -m pip install --quiet pyjwt cryptography requests
 
-      - name: Attach Build 16 and submit version for App Review
+      - name: Add Apple EULA, attach Build 16 and submit for App Review
         shell: bash
         run: |
           set -euo pipefail
@@ -47,6 +47,8 @@ jobs:
           import jwt, requests
 
           BASE = 'https://api.appstoreconnect.apple.com/v1'
+          EULA_URL = 'https://www.apple.com/legal/internet-services/itunes/dev/stdeula/'
+          EULA_SUFFIX = '\n\nTerms of Use (EULA): ' + EULA_URL
           bundle_id = os.environ['BUNDLE_ID']
           build_number = os.environ['BUILD_NUMBER']
           key_id = os.environ['ASC_KEY_ID']
@@ -62,8 +64,7 @@ jobs:
           headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
 
           def call(method, path, *, params=None, body=None, ok=(200,201,204)):
-              url = BASE + path
-              r = requests.request(method, url, headers=headers, params=params, json=body, timeout=45)
+              r = requests.request(method, BASE + path, headers=headers, params=params, json=body, timeout=45)
               if r.status_code not in ok:
                   print(f'ASC ERROR {method} {path}: HTTP {r.status_code}')
                   try:
@@ -85,37 +86,73 @@ jobs:
           versions = call('GET', f'/apps/{app_id}/appStoreVersions', params={
               'filter[platform]': 'IOS',
               'limit': '50',
-              'fields[appStoreVersions]': 'platform,versionString,appStoreState,appVersionState,releaseType,build'
+              'fields[appStoreVersions]': 'platform,versionString,appVersionState,releaseType,build'
           })['data']
           candidates = [v for v in versions if v.get('attributes', {}).get('versionString') in ('1.0', '1.0.0')]
           if not candidates:
               print('No iOS App Store version 1.0/1.0.0 exists in App Store Connect.')
-              print('Existing versions:', [(v.get('attributes',{}).get('versionString'), v.get('attributes',{}).get('appVersionState')) for v in versions])
               raise SystemExit(1)
           editable_states = {'PREPARE_FOR_SUBMISSION','READY_FOR_REVIEW','DEVELOPER_REJECTED','METADATA_REJECTED','REJECTED'}
-          editable = [v for v in candidates if (v.get('attributes',{}).get('appVersionState') or v.get('attributes',{}).get('appStoreState')) in editable_states]
+          editable = [v for v in candidates if v.get('attributes',{}).get('appVersionState') in editable_states]
           version = editable[0] if editable else candidates[0]
           version_id = version['id']
           attrs = version.get('attributes', {})
-          print('Selected App Store version:', attrs.get('versionString'), attrs.get('appVersionState') or attrs.get('appStoreState'), version_id)
+          state = attrs.get('appVersionState')
+          print('Selected App Store version:', attrs.get('versionString'), state, version_id)
+
+          # Apple standard EULA must be at the end of every App Store description before submission.
+          locs = call('GET', f'/appStoreVersions/{version_id}/appStoreVersionLocalizations', params={
+              'limit': '50',
+              'fields[appStoreVersionLocalizations]': 'locale,description'
+          })['data']
+          if not locs:
+              print('No App Store version localizations found; cannot guarantee EULA in description.')
+              raise SystemExit(1)
+          for loc in locs:
+              loc_id = loc['id']
+              locale = loc.get('attributes', {}).get('locale', 'unknown')
+              desc = loc.get('attributes', {}).get('description') or ''
+              if EULA_URL in desc:
+                  before = desc.split(EULA_URL, 1)[0]
+                  before = before.rsplit('Terms of Use (EULA):', 1)[0].rstrip()
+                  new_desc = before + EULA_SUFFIX
+              else:
+                  max_base = 4000 - len(EULA_SUFFIX)
+                  new_desc = desc[:max_base].rstrip() + EULA_SUFFIX
+              call('PATCH', f'/appStoreVersionLocalizations/{loc_id}', body={
+                  'data': {
+                      'type': 'appStoreVersionLocalizations',
+                      'id': loc_id,
+                      'attributes': {'description': new_desc}
+                  }
+              })
+              print(f'Apple EULA appended to {locale} description.')
+
+          # Re-read and hard-gate the EULA before any submission action.
+          verify_locs = call('GET', f'/appStoreVersions/{version_id}/appStoreVersionLocalizations', params={
+              'limit': '50',
+              'fields[appStoreVersionLocalizations]': 'locale,description'
+          })['data']
+          for loc in verify_locs:
+              locale = loc.get('attributes', {}).get('locale', 'unknown')
+              desc = (loc.get('attributes', {}).get('description') or '').rstrip()
+              if not desc.endswith('Terms of Use (EULA): ' + EULA_URL):
+                  print(f'EULA final-position verification failed for {locale}')
+                  raise SystemExit(1)
+          print('EULA final-position verification passed for all descriptions.')
 
           builds = call('GET', '/builds', params={
               'filter[app]': app_id,
               'filter[version]': build_number,
-              'filter[buildAudienceType]': 'APP_STORE_ELIGIBLE',
               'limit': '20',
               'sort': '-uploadedDate',
               'fields[builds]': 'version,uploadedDate,processingState,buildAudienceType,usesNonExemptEncryption'
           })['data']
-          if not builds:
-              print(f'Build {build_number} is not yet available as APP_STORE_ELIGIBLE.')
-              raise SystemExit(1)
           valid = [b for b in builds if b.get('attributes',{}).get('processingState') == 'VALID']
           if not valid:
-              print('Build 16 exists but is not VALID yet:', [(b['id'], b.get('attributes',{}).get('processingState')) for b in builds])
+              print('Build 16 is not VALID/available yet.')
               raise SystemExit(1)
-          build = valid[0]
-          build_id = build['id']
+          build_id = valid[0]['id']
           print('Build 16 VALID:', build_id)
 
           call('PATCH', f'/appStoreVersions/{version_id}/relationships/build', body={
@@ -123,7 +160,6 @@ jobs:
           }, ok=(204,))
           print('Build 16 attached to App Store version.')
 
-          state = attrs.get('appVersionState') or attrs.get('appStoreState')
           if state in {'WAITING_FOR_REVIEW','IN_REVIEW','PENDING_APPLE_RELEASE','PENDING_DEVELOPER_RELEASE','PROCESSING_FOR_DISTRIBUTION','READY_FOR_DISTRIBUTION','READY_FOR_SALE'}:
               print('Version is already submitted or beyond submission state:', state)
               sys.exit(0)
@@ -131,38 +167,32 @@ jobs:
           submissions = call('GET', f'/apps/{app_id}/reviewSubmissions', params={
               'filter[platform]': 'IOS',
               'limit': '50',
-              'include': 'items,appStoreVersionForReview',
-              'fields[reviewSubmissions]': 'platform,submittedDate,state,items,appStoreVersionForReview'
+              'fields[reviewSubmissions]': 'platform,submittedDate,state'
           })['data']
           active = [s for s in submissions if s.get('attributes',{}).get('state') == 'READY_FOR_REVIEW']
           if active:
               submission = active[0]
               print('Using existing READY_FOR_REVIEW submission:', submission['id'])
           else:
-              payload = {
+              submission = call('POST', '/reviewSubmissions', body={
                   'data': {
                       'type': 'reviewSubmissions',
                       'attributes': {'platform': 'IOS'},
                       'relationships': {'app': {'data': {'type': 'apps', 'id': app_id}}}
                   }
-              }
-              submission = call('POST', '/reviewSubmissions', body=payload)['data']
+              })['data']
               print('Created review submission:', submission['id'])
           submission_id = submission['id']
 
-          items_resp = call('GET', f'/reviewSubmissions/{submission_id}/items', params={
-              'include': 'appStoreVersion',
-              'limit': '200',
-              'fields[reviewSubmissionItems]': 'state,appStoreVersion',
-              'fields[appStoreVersions]': 'versionString,appVersionState'
-          })
-          linked_version_ids = set()
-          for item in items_resp.get('data', []):
+          items = call('GET', f'/reviewSubmissions/{submission_id}/items', params={'limit': '200'})['data']
+          linked = False
+          for item in items:
               rel = item.get('relationships', {}).get('appStoreVersion', {}).get('data')
-              if rel:
-                  linked_version_ids.add(rel['id'])
-          if version_id not in linked_version_ids:
-              item_payload = {
+              if rel and rel.get('id') == version_id:
+                  linked = True
+                  break
+          if not linked:
+              call('POST', '/reviewSubmissionItems', body={
                   'data': {
                       'type': 'reviewSubmissionItems',
                       'relationships': {
@@ -170,21 +200,16 @@ jobs:
                           'appStoreVersion': {'data': {'type': 'appStoreVersions', 'id': version_id}}
                       }
                   }
-              }
-              call('POST', '/reviewSubmissionItems', body=item_payload)
+              })
               print('App Store version added to review submission.')
-          else:
-              print('App Store version already present in review submission.')
 
-          submit_payload = {
+          result = call('PATCH', f'/reviewSubmissions/{submission_id}', body={
               'data': {
                   'type': 'reviewSubmissions',
                   'id': submission_id,
                   'attributes': {'submitted': True}
               }
-          }
-          result = call('PATCH', f'/reviewSubmissions/{submission_id}', body=submit_payload)['data']
-          final_state = result.get('attributes', {}).get('state')
-          print('SUBMITTED TO APP REVIEW. Review submission state:', final_state)
+          })['data']
+          print('SUBMITTED TO APP REVIEW. State:', result.get('attributes', {}).get('state'))
           print('Review submission id:', submission_id)
           PY
