@@ -10,17 +10,22 @@ signal purchase_completed(theme_id: String)
 signal purchase_failed(message: String)
 signal restore_completed(theme_ids: Array[String])
 signal restore_failed(message: String)
+signal remove_ads_product_updated(price: String)
+signal remove_ads_entitlement_updated(owned: bool)
+signal remove_ads_purchase_completed
 
 const PRODUCT_BY_THEME := {
     "neon": "de.kamilunavo.ninenine.theme.neon",
     "gold": "de.kamilunavo.ninenine.theme.gold",
     "aurora": "de.kamilunavo.ninenine.theme.aurora",
 }
+const REMOVE_ADS_PRODUCT := "de.kamilunavo.ninenine.removeads"
 
 var iap: Node
 var store_ready := false
 var products: Dictionary = {}
 var prices: Dictionary = {}
+var remove_ads_price := ""
 var _started := false
 var _catalog_loaded := false
 
@@ -33,14 +38,8 @@ func start_store() -> void:
         store_state_changed.emit(false, "Store available on iOS / Android device")
         return
 
-    # GodotIap's editor plugin installs /root/GodotIapPlugin as an autoload.
-    # Reusing that singleton is important: godot_iap.gd guards initialization
-    # with a static flag, so creating a second wrapper can leave the duplicate
-    # instance without its native StoreKit / Play Billing plugin.
     iap = get_node_or_null("/root/GodotIapPlugin")
     if iap == null:
-        # Defensive fallback for exports where the editor autoload was not
-        # persisted. Wait until the wrapper has completed _ready() before using it.
         iap = GodotIapWrapperScript.new()
         iap.name = "GodotIapFallback"
         add_child(iap)
@@ -61,10 +60,10 @@ func start_store() -> void:
     store_state_changed.emit(true, "Store connected · loading products")
     await _fetch_products()
 
-    if prices.is_empty():
+    if prices.is_empty() and remove_ads_price.is_empty():
         store_state_changed.emit(true, "Store connected · products unavailable")
     else:
-        store_state_changed.emit(true, "Store ready · %d premium products" % prices.size())
+        store_state_changed.emit(true, "Store ready")
 
     await refresh_entitlements()
 
@@ -85,11 +84,13 @@ func _fetch_products() -> void:
     _catalog_loaded = false
     products.clear()
     prices.clear()
+    remove_ads_price = ""
 
     var request = Types.ProductRequest.new()
     var sku_list: Array[String] = []
     for sku in PRODUCT_BY_THEME.values():
         sku_list.append(str(sku))
+    sku_list.append(REMOVE_ADS_PRODUCT)
     request.skus = sku_list
     request.type = Types.ProductQueryType.IN_APP
 
@@ -99,6 +100,7 @@ func _fetch_products() -> void:
     else:
         _catalog_loaded = true
         products_updated.emit(prices.duplicate())
+        remove_ads_product_updated.emit(remove_ads_price)
 
 func _on_products_fetched(result: Dictionary) -> void:
     var fetched = result.get("products", [])
@@ -107,6 +109,7 @@ func _on_products_fetched(result: Dictionary) -> void:
     elif not _catalog_loaded:
         _catalog_loaded = true
         products_updated.emit(prices.duplicate())
+        remove_ads_product_updated.emit(remove_ads_price)
 
 func _consume_products(fetched: Array) -> void:
     for product in fetched:
@@ -114,25 +117,36 @@ func _consume_products(fetched: Array) -> void:
         if product_id.is_empty():
             continue
         products[product_id] = product
-        var theme_id := theme_for_product(product_id)
-        if theme_id.is_empty():
-            continue
         var display_price := _field_string(product, ["display_price", "displayPrice", "localizedPrice"])
-        if not display_price.is_empty():
+        if product_id == REMOVE_ADS_PRODUCT:
+            if not display_price.is_empty():
+                remove_ads_price = display_price
+            continue
+        var theme_id := theme_for_product(product_id)
+        if not theme_id.is_empty() and not display_price.is_empty():
             prices[theme_id] = display_price
 
     _catalog_loaded = true
     products_updated.emit(prices.duplicate())
+    remove_ads_product_updated.emit(remove_ads_price)
 
 func purchase_theme(theme_id: String) -> void:
     if not PRODUCT_BY_THEME.has(theme_id):
         purchase_failed.emit("Unknown premium design")
         return
+    _purchase_product(str(PRODUCT_BY_THEME[theme_id]))
+
+func purchase_remove_ads() -> void:
+    if OS.get_name() != "iOS":
+        purchase_failed.emit("Remove Ads is available on iOS")
+        return
+    _purchase_product(REMOVE_ADS_PRODUCT)
+
+func _purchase_product(product_id: String) -> void:
     if not store_ready or iap == null:
         purchase_failed.emit("Store is not ready yet")
         return
 
-    var product_id := str(PRODUCT_BY_THEME[theme_id])
     var props = Types.RequestPurchaseProps.new()
     props.request = Types.RequestPurchasePropsByPlatforms.new()
     props.request.apple = Types.RequestPurchaseIosProps.new()
@@ -156,6 +170,7 @@ func restore_theme_purchases() -> void:
 
 func refresh_entitlements() -> Array[String]:
     var owned: Array[String] = []
+    var remove_ads_owned := false
     if not store_ready or iap == null:
         return owned
     var result = await iap.get_available_purchases_result()
@@ -165,14 +180,21 @@ func refresh_entitlements() -> Array[String]:
     if purchases is Array:
         for purchase in purchases:
             var product_id := _field_string(purchase, ["product_id", "productId", "id"])
+            if product_id == REMOVE_ADS_PRODUCT:
+                remove_ads_owned = true
+                continue
             var theme_id := theme_for_product(product_id)
             if not theme_id.is_empty() and not owned.has(theme_id):
                 owned.append(theme_id)
     entitlements_updated.emit(owned)
+    remove_ads_entitlement_updated.emit(remove_ads_owned)
     return owned
 
 func get_display_price(theme_id: String) -> String:
     return str(prices.get(theme_id, ""))
+
+func get_remove_ads_price() -> String:
+    return remove_ads_price
 
 func theme_for_product(product_id: String) -> String:
     for theme_id in PRODUCT_BY_THEME.keys():
@@ -182,15 +204,22 @@ func theme_for_product(product_id: String) -> String:
 
 func _on_purchase_updated(purchase: Dictionary) -> void:
     var product_id := _field_string(purchase, ["productId", "product_id", "id"])
-    var theme_id := theme_for_product(product_id)
-    if theme_id.is_empty():
-        return
     var state := _field_string(purchase, ["purchaseState", "purchase_state"])
     if not state.is_empty() and state.to_lower() not in ["purchased", "purchased_successfully"]:
         return
 
-    # These designs are non-consumable. StoreKit / Play remains the source of truth;
-    # local ownership is only a cache rebuilt through refresh/restore.
+    if product_id == REMOVE_ADS_PRODUCT:
+        var remove_finish = await iap.finish_transaction_dict(purchase, false)
+        if not _result_success(remove_finish):
+            push_warning("IAP transaction finish reported failure for %s" % product_id)
+        remove_ads_purchase_completed.emit()
+        remove_ads_entitlement_updated.emit(true)
+        return
+
+    var theme_id := theme_for_product(product_id)
+    if theme_id.is_empty():
+        return
+
     var finish_result = await iap.finish_transaction_dict(purchase, false)
     if not _result_success(finish_result):
         push_warning("IAP transaction finish reported failure for %s" % product_id)
