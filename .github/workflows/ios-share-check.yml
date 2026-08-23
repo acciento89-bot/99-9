@@ -1,0 +1,108 @@
+name: 99.9 iOS Share Check
+
+on:
+  push:
+    branches: ['feature/native-share-polish']
+  pull_request:
+    paths:
+      - 'scripts/main_v8.gd'
+      - 'scripts/main_v9.gd'
+      - 'scripts/ci_install_share_ios.sh'
+      - 'scenes/main.tscn'
+      - 'export_presets.cfg'
+      - '.github/workflows/ios-share-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GODOT_VERSION: '4.7.2'
+  GODOT_TAG: '4.7.2-stable'
+
+jobs:
+  ios-native-share:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install native iOS Share and AdMob packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x scripts/ci_install_share_ios.sh
+          bash scripts/ci_install_share_ios.sh
+          bash scripts/ci_install_admob.sh ios
+          test -f ios/plugins/share/share.gdip
+          test -f ios/plugins/share/share.release.a
+          test -f addons/admob/ios/bin/ads/poing_godot_admob_ads.gd
+
+      - name: Install Godot 4.7.2 and iOS templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 -o "$RUNNER_TEMP/godot.zip" \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_macos.universal.zip"
+          mkdir -p "$RUNNER_TEMP/godot"
+          unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP/godot"
+          GODOT="$RUNNER_TEMP/godot/Godot.app/Contents/MacOS/Godot"
+          echo "GODOT=$GODOT" >> "$GITHUB_ENV"
+
+          T="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$T" "$RUNNER_TEMP/templates"
+          curl -L --fail --retry 3 -o "$RUNNER_TEMP/templates.tpz" \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_export_templates.tpz"
+          unzip -q "$RUNNER_TEMP/templates.tpz" -d "$RUNNER_TEMP/templates"
+          cp -R "$RUNNER_TEMP/templates/templates/." "$T/"
+          test -f "$T/ios.zip"
+
+      - name: Parse feature scripts
+        shell: bash
+        run: |
+          set -o pipefail
+          "$GODOT" --headless --editor --path . --quit 2>&1 | tee "$RUNNER_TEMP/parse.log"
+          if grep -E 'SCRIPT ERROR|Parse Error|Compile Error|Failed to load script' "$RUNNER_TEMP/parse.log"; then
+            exit 1
+          fi
+
+      - name: Export and verify native Share integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/ios
+          "$GODOT" --headless --path . --export-release "iOS Playtest" build/ios/NineNine.zip
+          test -d build/ios/NineNine.xcodeproj
+
+          chmod +x addons/godot-iap/scripts/fix_ios_embed.sh
+          IOS_EXPORT_DIR="$PWD/build/ios" ./addons/godot-iap/scripts/fix_ios_embed.sh
+
+          grep -qi 'share.release.a\|share.a' build/ios/NineNine.xcodeproj/project.pbxproj || {
+            echo 'Native iOS Share library is missing from generated Xcode project'
+            exit 1
+          }
+          grep -q 'GodotIap.framework' build/ios/NineNine.xcodeproj/project.pbxproj
+          grep -R -q 'GoogleMobileAds' build/ios
+
+          xcodebuild -project build/ios/NineNine.xcodeproj -list -json > "$RUNNER_TEMP/xcode.json"
+          SCHEME=$(python3 - <<'PY'
+          import json, os
+          d=json.load(open(os.environ['RUNNER_TEMP']+'/xcode.json'))['project']
+          print((d.get('schemes') or d.get('targets') or [''])[0])
+          PY
+          )
+          test -n "$SCHEME"
+
+          xcodebuild \
+            -project build/ios/NineNine.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+          echo 'Achievements/stats scripts parse and native iOS Share library links successfully.'
