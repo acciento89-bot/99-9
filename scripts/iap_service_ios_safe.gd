@@ -13,13 +13,23 @@ func start_store() -> void:
         return
     _started = true
 
+    # The Godot IAP editor plugin exports /root/GodotIapPlugin as an autoload.
+    # Reuse that already-initialized wrapper on iOS. Creating a second wrapper
+    # here is invalid because GodotIapWrapper intentionally guards native setup
+    # with a static _is_initialized flag; the second instance therefore has no
+    # native StoreKit bridge and init_connection() always returns false.
     if iap == null or not is_instance_valid(iap):
-        iap = SafeGodotIapWrapperScript.new()
-        iap.name = "GodotIapIOSSafe"
-        add_child(iap)
-        if not iap.is_node_ready():
-            await iap.ready
-    elif not iap.is_node_ready():
+        var autoload_iap := get_node_or_null("/root/GodotIapPlugin")
+        if autoload_iap != null and is_instance_valid(autoload_iap):
+            iap = autoload_iap
+        else:
+            # Defensive fallback for exports where the autoload is unavailable.
+            # This remains iOS-only and does not alter the Android path.
+            iap = SafeGodotIapWrapperScript.new()
+            iap.name = "GodotIapIOSSafeFallback"
+            add_child(iap)
+
+    if iap != null and not iap.is_node_ready():
         await iap.ready
 
     if _ios_suspended or _ios_terminating or not is_inside_tree():
@@ -34,7 +44,9 @@ func start_store() -> void:
 
     store_ready = bool(connected)
     if not store_ready:
-        store_state_changed.emit(false, "Store connection unavailable")
+        # Make a failed launch recoverable when the app becomes active again.
+        _started = false
+        store_state_changed.emit(false, "Store connection unavailable · reopen Designs to retry")
         return
 
     store_state_changed.emit(true, "Store connected · loading products")
