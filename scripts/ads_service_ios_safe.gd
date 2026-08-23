@@ -4,10 +4,14 @@ extends "res://scripts/ads_service.gd"
 # Build 12's crash log terminates in GDScriptLambdaSelfCallable destruction.
 # Poing AdMob listener/ad objects ship with anonymous GDScript lambdas as
 # default callback values. Every callback slot that survives beyond creation is
-# replaced here with a named Callable while Godot is fully alive.
+# replaced on iOS with a named Callable while Godot is fully alive.
+# Non-iOS platforms delegate to the original service unchanged.
 
 func show_privacy_options() -> void:
-    if _shutting_down or _ads_removed or OS.get_name() != "iOS":
+    if OS.get_name() != "iOS":
+        super.show_privacy_options()
+        return
+    if _shutting_down or _ads_removed:
         return
     UserMessagingPlatform.show_privacy_options_form(Callable(self, "_on_privacy_options_result"))
 
@@ -24,6 +28,9 @@ func _on_privacy_options_result(error) -> void:
         _disable_ads_for_privacy("ADS DISABLED · CONSENT REQUIRED")
 
 func _request_user_consent() -> void:
+    if OS.get_name() != "iOS":
+        super._request_user_consent()
+        return
     if _shutting_down or _ads_removed:
         return
     var params := ConsentRequestParameters.new()
@@ -54,6 +61,9 @@ func _on_consent_info_updated_failure(error) -> void:
     _disable_ads_for_privacy("ADS DISABLED · CONSENT UNAVAILABLE")
 
 func _load_and_show_consent_form() -> void:
+    if OS.get_name() != "iOS":
+        super._load_and_show_consent_form()
+        return
     if _shutting_down or _ads_removed:
         return
     UserMessagingPlatform.load_consent_form(
@@ -87,6 +97,9 @@ func _on_consent_form_dismissed(error) -> void:
         _disable_ads_for_privacy("ADS DISABLED · CONSENT REQUIRED")
 
 func _initialize_mobile_ads() -> void:
+    if OS.get_name() != "iOS":
+        super._initialize_mobile_ads()
+        return
     if _shutting_down or _ads_removed or _ads_ready or not _consent_allows_ads():
         return
 
@@ -112,6 +125,9 @@ func _on_mobile_ads_initialized(_status) -> void:
     _load_interstitial()
 
 func _load_interstitial() -> void:
+    if OS.get_name() != "iOS":
+        super._load_interstitial()
+        return
     if _shutting_down or _ads_removed or not _ads_ready or not _consent_allows_ads() or _interstitial_ad != null:
         return
 
@@ -156,6 +172,9 @@ func _on_interstitial_loaded(ad) -> void:
     interstitial_state_changed.emit(true)
 
 func _attach_full_screen_callback() -> void:
+    if OS.get_name() != "iOS":
+        super._attach_full_screen_callback()
+        return
     if _shutting_down or _interstitial_ad == null or _ads_removed:
         return
 
@@ -218,10 +237,11 @@ func _notification(what: int) -> void:
             call_deferred("_load_interstitial")
 
 func _exit_tree() -> void:
-    _shutting_down = true
+    if OS.get_name() != "iOS":
+        super._exit_tree()
+        return
 
-    # These are named Callables now (not GDScript lambdas). Release them while
-    # the scene is still alive; do not invoke native destroy during teardown.
+    _shutting_down = true
     _initialization_listener = null
     _load_callback = null
     _full_screen_callback = null
