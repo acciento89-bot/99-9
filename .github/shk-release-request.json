@@ -1,8 +1,8 @@
 {
   "repository": "acciento89-bot/SHK",
-  "app": "anlagencheck",
+  "app": "kaltecalc",
   "source_ref": "main",
   "marketing_version": "1.0",
-  "build_number": "1",
-  "attempt": 8
+  "build_number": "2",
+  "attempt": 9
 }
