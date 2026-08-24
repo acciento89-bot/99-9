@@ -3,5 +3,6 @@
   "version": "1.0",
   "build": "2",
   "action": "update-description-and-verify-standard-eula",
-  "requested_at": "2026-08-24"
+  "requested_at": "2026-08-24",
+  "attempt": 2
 }
