@@ -5,5 +5,6 @@
   "build_number": "2",
   "locale": "de-DE",
   "price_eur": "4.99",
-  "requested_at": "2026-08-24"
+  "requested_at": "2026-08-24",
+  "attempt": 2
 }
