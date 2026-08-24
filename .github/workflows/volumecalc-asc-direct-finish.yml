@@ -1,0 +1,121 @@
+name: VolumeCalc ASC Direct Finish
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/volumecalc-asc-direct-request.json'
+
+permissions:
+  contents: read
+
+jobs:
+  finish:
+    runs-on: macos-26
+    timeout-minutes: 10
+    env:
+      APP_ID: '6804672773'
+      APP_INFO_ID: 'b3ce09f2-a3d4-4681-a5e9-315326a8dc6f'
+      VERSION_ID: 'ca53ae3a-fb00-4a93-9203-b69b2c6845d5'
+      LOC_ID: 'b236c044-e75f-4581-97e2-d4ae71e5c1a6'
+      BUILD_ID: '0645f390-218a-42a4-a230-8bf3ea2a6978'
+      PRICE_POINT_ID: 'eyJzIjoiNjgwNDY3Mjc3MyIsInQiOiJERVUiLCJwIjoiMTAwNjIifQ'
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install ASC key
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          printf '%s' "$ASC_PRIVATE_KEY_B64" | tr -d '\r\n ' | base64 --decode > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          echo "ASC_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Create 4.99 EUR price and audit
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          API='https://api.appstoreconnect.apple.com'
+          jwt() {
+            ruby <<'RUBY'
+          require 'openssl'; require 'base64'; require 'json'
+          def b(v); Base64.urlsafe_encode64(v,padding:false); end
+          key=OpenSSL::PKey.read(File.read(ENV.fetch('ASC_KEY_PATH'))); now=Time.now.to_i
+          h=b(JSON.generate({alg:'ES256',kid:ENV.fetch('ASC_KEY_ID'),typ:'JWT'}))
+          p=b(JSON.generate({iss:ENV.fetch('ASC_ISSUER_ID'),iat:now,exp:now+900,aud:'appstoreconnect-v1'}))
+          s="#{h}.#{p}"
+          seq=OpenSSL::ASN1.decode(key.sign(OpenSSL::Digest::SHA256.new,s))
+          raw=seq.value.map{|i|[i.value.to_i.to_s(16).rjust(64,'0')].pack('H*')}.join
+          puts "#{s}.#{b(raw)}"
+          RUBY
+          }
+          raw_get() {
+            local path="$1" out="$2"
+            curl --no-fail --no-fail-with-body --globoff -sS -o "$out" -w '%{http_code}' -H "Authorization: Bearer $(jwt)" "$API$path" || printf 'CURLFAIL'
+          }
+          raw_post() {
+            local path="$1" body="$2" out="$3"
+            curl --no-fail --no-fail-with-body --globoff -sS -o "$out" -w '%{http_code}' -X POST -H "Authorization: Bearer $(jwt)" -H 'Content-Type: application/json' -d "$body" "$API$path" || printf 'CURLFAIL'
+          }
+
+          echo '=== PRICE ==='
+          SFILE="$RUNNER_TEMP/schedule.json"
+          SCODE=$(raw_get "/v1/apps/$APP_ID/appPriceSchedule" "$SFILE")
+          echo "Existing schedule HTTP=$SCODE"
+          if [ "$SCODE" = '404' ]; then
+            BODY=$(jq -nc --arg app "$APP_ID" --arg pp "$PRICE_POINT_ID" '{data:{type:"appPriceSchedules",relationships:{app:{data:{type:"apps",id:$app}},baseTerritory:{data:{type:"territories",id:"DEU"}},manualPrices:{data:[{type:"appPrices",id:"manualPrice-0"}]}}},included:[{type:"appPrices",id:"manualPrice-0",relationships:{appPricePoint:{data:{type:"appPricePoints",id:$pp}}}}]}')
+            PFILE="$RUNNER_TEMP/price-create.json"
+            PCODE=$(raw_post '/v1/appPriceSchedules' "$BODY" "$PFILE")
+            echo "Create schedule HTTP=$PCODE"
+            cat "$PFILE" | jq '.' || cat "$PFILE"
+            test "$PCODE" = '201'
+            echo 'PRICE_RESULT=4.99 EUR CREATED'
+          elif [ "$SCODE" = '200' ]; then
+            echo 'Price schedule already exists:'
+            jq '{id:.data.id}' "$SFILE"
+            echo 'PRICE_RESULT=SCHEDULE_ALREADY_EXISTS'
+          else
+            cat "$SFILE" || true
+            exit 11
+          fi
+
+          echo '=== VERIFY BUILD RELATION ==='
+          VFILE="$RUNNER_TEMP/version.json"
+          VCODE=$(raw_get "/v1/appStoreVersions/$VERSION_ID?include=build" "$VFILE")
+          test "$VCODE" = '200'
+          jq '{version:.data.attributes.versionString,state:.data.attributes.appStoreState,releaseType:.data.attributes.releaseType,build:(.included[]? | select(.type=="builds") | {id,version:.attributes.version,processingState:.attributes.processingState})}' "$VFILE"
+          jq -e --arg bid "$BUILD_ID" '.included[]? | select(.type=="builds" and .id==$bid)' "$VFILE" >/dev/null
+          echo 'BUILD_RESULT=BUILD_2_ATTACHED'
+
+          echo '=== AGE RATING ==='
+          AFILE="$RUNNER_TEMP/age.json"
+          ACODE=$(raw_get "/v1/appInfos/$APP_INFO_ID/ageRatingDeclaration" "$AFILE")
+          echo "Age rating HTTP=$ACODE"
+          test "$ACODE" = '200'
+          jq '{id:.data.id,attributes:.data.attributes}' "$AFILE"
+
+          echo '=== REVIEW DETAIL ==='
+          RFILE="$RUNNER_TEMP/review.json"
+          RCODE=$(raw_get "/v1/appStoreVersions/$VERSION_ID/appStoreReviewDetail" "$RFILE")
+          echo "Review detail HTTP=$RCODE"
+          if [ "$RCODE" = '200' ]; then jq '{id:.data.id,attributes:.data.attributes}' "$RFILE"; else cat "$RFILE" | jq '.' || true; fi
+
+          echo '=== SCREENSHOT SETS ==='
+          SSFILE="$RUNNER_TEMP/screenshots.json"
+          SSCODE=$(raw_get "/v1/appStoreVersionLocalizations/$LOC_ID/appScreenshotSets?limit=50" "$SSFILE")
+          test "$SSCODE" = '200'
+          jq '[.data[] | {id,displayType:.attributes.screenshotDisplayType}]' "$SSFILE"
+
+      - name: Remove ASC key
+        if: always()
+        shell: bash
+        run: rm -f "$HOME/.appstoreconnect/private_keys"/AuthKey_*.p8
