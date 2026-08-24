@@ -1,11 +1,11 @@
 {
-  "run_id": 32757980945,
-  "run_url": "https://github.com/acciento89-bot/99-9/actions/runs/32757980945",
+  "run_id": 32759103216,
+  "run_url": "https://github.com/acciento89-bot/99-9/actions/runs/32759103216",
   "conclusion": "success",
-  "head_sha": "4524328dd87aeeec7b04cdd28db5d792f2e4c631",
+  "head_sha": "87a64c2e5f4a145c4bac8242e8a60f5ce3d34319",
   "event": "push",
-  "app": "anlagencheck",
+  "app": "kaltecalc",
   "marketing_version": "1.0",
-  "build_number": "1",
+  "build_number": "2",
   "source_ref": "main"
 }
