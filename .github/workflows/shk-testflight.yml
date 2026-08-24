@@ -110,6 +110,7 @@ jobs:
           test -s release/apps.json
           ENTRY=$(jq -cer --arg key "$APP_KEY" '.apps[] | select(.key == $key)' release/apps.json)
           SCHEME=$(jq -r '.scheme' <<<"$ENTRY")
+          PRODUCT_NAME=$(jq -r '.product_name' <<<"$ENTRY")
           DISPLAY_NAME=$(jq -r '.display_name' <<<"$ENTRY")
           BUNDLE_ID=$(jq -r '.bundle_id' <<<"$ENTRY")
           SOURCE_DIR=$(jq -r '.source_dir' <<<"$ENTRY")
@@ -117,17 +118,21 @@ jobs:
           TEAM_ID=$(jq -r '.team_id' release/apps.json)
           test "$TEAM_ID" = "$APPLE_TEAM_ID"
           test -d "$SOURCE_DIR"
+          test -n "$PRODUCT_NAME"
           grep -Fq "PRODUCT_BUNDLE_IDENTIFIER: $BUNDLE_ID" project.yml
-          grep -Fq "PRODUCT_NAME: $DISPLAY_NAME" project.yml
+          grep -Fq "PRODUCT_NAME: $PRODUCT_NAME" project.yml
+          grep -Fq "INFOPLIST_KEY_CFBundleDisplayName: $DISPLAY_NAME" project.yml
           echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
+          echo "PRODUCT_NAME=$PRODUCT_NAME" >> "$GITHUB_ENV"
           echo "DISPLAY_NAME=$DISPLAY_NAME" >> "$GITHUB_ENV"
           echo "BUNDLE_ID=$BUNDLE_ID" >> "$GITHUB_ENV"
           echo "SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
           echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
           echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
+          echo "product_name=$PRODUCT_NAME" >> "$GITHUB_OUTPUT"
           echo "display_name=$DISPLAY_NAME" >> "$GITHUB_OUTPUT"
           echo "bundle_id=$BUNDLE_ID" >> "$GITHUB_OUTPUT"
-          printf 'Identity verified: %s / %s / %s\n' "$DISPLAY_NAME" "$SCHEME" "$BUNDLE_ID"
+          printf 'Identity verified: %s / product=%s / scheme=%s / %s\n' "$DISPLAY_NAME" "$PRODUCT_NAME" "$SCHEME" "$BUNDLE_ID"
 
       - name: Run SHK core tests
         shell: bash
@@ -203,7 +208,7 @@ jobs:
           echo "ASC_APP_ID=$APP_ID" >> "$GITHUB_ENV"
           printf 'App Store Connect record: %s / %s / %s\n' "$ASC_NAME" "$BUNDLE_ID" "$APP_ID"
 
-      - name: Create unsigned release archive
+      - name: Create unsigned iOS release archive
         shell: bash
         run: |
           set -euo pipefail
@@ -225,9 +230,10 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             clean archive
-          APP=$(find "$ARCHIVE/Products/Applications" -maxdepth 1 -type d -name '*.app' -print -quit)
+          APP="$ARCHIVE/Products/Applications/${PRODUCT_NAME}.app"
           test -d "$APP"
           /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist" | grep -Fx "$BUNDLE_ID"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$APP/Info.plist" | grep -Fx "$DISPLAY_NAME"
           /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist" | grep -Fx "$RELEASE_VERSION"
           /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist" | grep -Fx "$RELEASE_BUILD"
           test -s "$APP/Assets.car"
@@ -274,21 +280,20 @@ jobs:
           echo "IPA_PATH=$IPA" >> "$GITHUB_ENV"
           echo "EXPORT_DIR=$EXPORT_DIR" >> "$GITHUB_ENV"
 
-      - name: Inspect Apple Distribution signature
+      - name: Verify Apple Distribution signature
         shell: bash
         run: |
           set -euo pipefail
           SIGN_DIR="$RUNNER_TEMP/Signed-${SCHEME}"
           rm -rf "$SIGN_DIR"
           mkdir -p "$SIGN_DIR"
-          ditto -x -k "$IPA_PATH" "$SIGN_DIR"
+          unzip -q "$IPA_PATH" -d "$SIGN_DIR"
           SIGNED_APP=$(find "$SIGN_DIR/Payload" -maxdepth 1 -type d -name '*.app' -print -quit)
           test -d "$SIGNED_APP"
-          INFO=$(codesign -d --verbose=4 "$SIGNED_APP" 2>&1)
+          codesign --verify --deep --strict --verbose=2 "$SIGNED_APP"
+          INFO=$(codesign -dvv "$SIGNED_APP" 2>&1)
           grep -q '^Authority=Apple Distribution' <<<"$INFO"
-          grep -q "^TeamIdentifier=${APPLE_TEAM_ID}$" <<<"$INFO"
           /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$SIGNED_APP/Info.plist" | grep -Fx "$BUNDLE_ID"
-          echo 'Apple Distribution signature metadata verified. Package integrity is validated by App Store Connect in the next step.'
 
       - name: Validate IPA with App Store Connect
         env:
