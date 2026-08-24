@@ -1,0 +1,7 @@
+{
+  "app": "VolumeCalc",
+  "version": "1.0",
+  "build": "2",
+  "action": "replace-description-with-clean-text-and-standard-eula",
+  "requested_at": "2026-08-24"
+}
