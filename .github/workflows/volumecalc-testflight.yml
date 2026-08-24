@@ -34,20 +34,57 @@ env:
   VOLUMECALC_REPO: acciento89-bot/AnlagenVolumen
   VOLUMECALC_BUNDLE_ID: de.kamilunavo.volumecalc
   APPLE_TEAM_ID: TKG684N5GL
-  SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || 'main' }}
-  RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.marketing_version || '1.0' }}
-  RELEASE_BUILD: ${{ github.event_name == 'workflow_dispatch' && inputs.build_number || '1' }}
 
 jobs:
   build-and-upload:
     runs-on: macos-26
     timeout-minutes: 45
     steps:
+      - name: Checkout bridge release request
+        uses: actions/checkout@v5
+        with:
+          path: bridge
+
+      - name: Resolve VolumeCalc release request
+        id: release
+        shell: bash
+        env:
+          DISPATCH_SOURCE_REF: ${{ inputs.source_ref }}
+          DISPATCH_VERSION: ${{ inputs.marketing_version }}
+          DISPATCH_BUILD: ${{ inputs.build_number }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            SOURCE_REF="$DISPATCH_SOURCE_REF"
+            RELEASE_VERSION="$DISPATCH_VERSION"
+            RELEASE_BUILD="$DISPATCH_BUILD"
+          else
+            REQUEST="bridge/.github/volumecalc-release-request.json"
+            test -s "$REQUEST"
+            SOURCE_REF=$(jq -er '.source_ref' "$REQUEST")
+            RELEASE_VERSION=$(jq -er '.marketing_version' "$REQUEST")
+            RELEASE_BUILD=$(jq -er '.build_number' "$REQUEST")
+            jq -e '.app == "VolumeCalc"' "$REQUEST" >/dev/null
+            jq -e '.repository == "acciento89-bot/AnlagenVolumen"' "$REQUEST" >/dev/null
+            jq -e '.bundle_id == "de.kamilunavo.volumecalc"' "$REQUEST" >/dev/null
+            jq -e '.sku == "volumecalc-001"' "$REQUEST" >/dev/null
+          fi
+          test -n "$SOURCE_REF"
+          test -n "$RELEASE_VERSION"
+          [[ "$RELEASE_BUILD" =~ ^[0-9]+$ ]]
+          echo "SOURCE_REF=$SOURCE_REF" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=$RELEASE_VERSION" >> "$GITHUB_ENV"
+          echo "RELEASE_BUILD=$RELEASE_BUILD" >> "$GITHUB_ENV"
+          echo "source_ref=$SOURCE_REF" >> "$GITHUB_OUTPUT"
+          echo "marketing_version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "build_number=$RELEASE_BUILD" >> "$GITHUB_OUTPUT"
+          printf 'Resolved release request: VolumeCalc %s (%s) from %s\n' "$RELEASE_VERSION" "$RELEASE_BUILD" "$SOURCE_REF"
+
       - name: Checkout VolumeCalc
         uses: actions/checkout@v5
         with:
           repository: ${{ env.VOLUMECALC_REPO }}
-          ref: ${{ env.SOURCE_REF }}
+          ref: ${{ steps.release.outputs.source_ref }}
           path: volumecalc
 
       - name: Verify VolumeCalc identity
@@ -219,7 +256,7 @@ jobs:
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: VolumeCalc-${{ env.RELEASE_VERSION }}-${{ env.RELEASE_BUILD }}
+          name: VolumeCalc-${{ steps.release.outputs.marketing_version }}-${{ steps.release.outputs.build_number }}
           path: ${{ runner.temp }}/VolumeCalcExport/*.ipa
           if-no-files-found: error
           retention-days: 14
