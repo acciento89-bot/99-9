@@ -10,115 +10,18 @@ on:
 permissions:
   contents: read
 
-env:
-  BUNDLE_ID: de.kamilunavo.volumecalc
-  RELEASE_VERSION: '1.0'
-  PRICE_EUR: '4.99'
-
 jobs:
   finish:
     runs-on: macos-26
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - name: Checkout bridge
+        uses: actions/checkout@v5
 
-      - name: Install ASC key
+      - name: Update and verify VolumeCalc App Store description
         env:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
         shell: bash
-        run: |
-          set -euo pipefail
-          KEY_DIR="$HOME/.appstoreconnect/private_keys"
-          mkdir -p "$KEY_DIR"
-          KEY_PATH="$KEY_DIR/AuthKey_${ASC_KEY_ID}.p8"
-          printf '%s' "$ASC_PRIVATE_KEY_B64" | tr -d '\r\n ' | base64 --decode > "$KEY_PATH"
-          chmod 600 "$KEY_PATH"
-          echo "ASC_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
-
-      - name: Set price and audit remaining ASC fields
-        env:
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          API='https://api.appstoreconnect.apple.com'
-          jwt() {
-            ruby <<'RUBY'
-          require 'openssl'; require 'base64'; require 'json'
-          def b(v); Base64.urlsafe_encode64(v,padding:false); end
-          key=OpenSSL::PKey.read(File.read(ENV.fetch('ASC_KEY_PATH'))); now=Time.now.to_i
-          h=b(JSON.generate({alg:'ES256',kid:ENV.fetch('ASC_KEY_ID'),typ:'JWT'}))
-          p=b(JSON.generate({iss:ENV.fetch('ASC_ISSUER_ID'),iat:now,exp:now+900,aud:'appstoreconnect-v1'}))
-          s="#{h}.#{p}"
-          seq=OpenSSL::ASN1.decode(key.sign(OpenSSL::Digest::SHA256.new,s))
-          raw=seq.value.map{|i|[i.value.to_i.to_s(16).rjust(64,'0')].pack('H*')}.join
-          puts "#{s}.#{b(raw)}"
-          RUBY
-          }
-          get() { curl --globoff --fail-with-body -sS -H "Authorization: Bearer $(jwt)" "$API$1"; }
-          post() { curl --globoff --fail-with-body -sS -X POST -H "Authorization: Bearer $(jwt)" -H 'Content-Type: application/json' -d "$2" "$API$1"; }
-
-          APP=$(get "/v1/apps?filter[bundleId]=$BUNDLE_ID&limit=10")
-          APP_ID=$(jq -r '.data[0].id // empty' <<<"$APP")
-          test -n "$APP_ID"
-          INFO=$(get "/v1/apps/$APP_ID/appInfos?limit=50")
-          APP_INFO_ID=$(jq -r '.data[0].id // empty' <<<"$INFO")
-          VERSION=$(get "/v1/apps/$APP_ID/appStoreVersions?filter[platform]=IOS&filter[versionString]=$RELEASE_VERSION&limit=50")
-          VERSION_ID=$(jq -r '.data[0].id // empty' <<<"$VERSION")
-          test -n "$APP_INFO_ID" -a -n "$VERSION_ID"
-
-          LOCS=$(get "/v1/appStoreVersions/$VERSION_ID/appStoreVersionLocalizations?limit=50")
-          LOC_ID=$(jq -r '.data[] | select(.attributes.locale=="de-DE") | .id' <<<"$LOCS" | head -1)
-          test -n "$LOC_ID"
-
-          echo "App=$APP_ID AppInfo=$APP_INFO_ID Version=$VERSION_ID Localization=$LOC_ID"
-
-          PRICE_POINTS=$(get "/v1/apps/$APP_ID/appPricePoints?filter[territory]=DEU&include=territory&limit=200")
-          PRICE_POINT_ID=$(jq -r --arg p "$PRICE_EUR" '.data[] | select(.attributes.customerPrice==$p) | .id' <<<"$PRICE_POINTS" | head -1)
-          test -n "$PRICE_POINT_ID"
-
-          SCHEDULE_FILE="$RUNNER_TEMP/price-schedule.json"
-          SCHEDULE_HTTP=$(curl --globoff -sS -o "$SCHEDULE_FILE" -w '%{http_code}' -H "Authorization: Bearer $(jwt)" "$API/v1/apps/$APP_ID/appPriceSchedule" || true)
-          if [ "$SCHEDULE_HTTP" = "404" ]; then
-            echo 'No price schedule exists; creating 4.99 EUR with Germany as base territory.'
-            PRICE_PAYLOAD=$(jq -nc --arg app "$APP_ID" --arg pp "$PRICE_POINT_ID" '{data:{type:"appPriceSchedules",relationships:{app:{data:{type:"apps",id:$app}},baseTerritory:{data:{type:"territories",id:"DEU"}},manualPrices:{data:[{type:"appPrices",id:"manualPrice-0"}]}}},included:[{type:"appPrices",id:"manualPrice-0",relationships:{appPricePoint:{data:{type:"appPricePoints",id:$pp}}}}]}')
-            post '/v1/appPriceSchedules' "$PRICE_PAYLOAD" >/dev/null
-            echo 'PRICE_RESULT=CREATED_4_99_EUR'
-          elif [ "$SCHEDULE_HTTP" = "200" ]; then
-            SCHEDULE_ID=$(jq -r '.data.id // empty' "$SCHEDULE_FILE")
-            MANUAL=$(get "/v1/appPriceSchedules/$SCHEDULE_ID/manualPrices?include=appPricePoint,territory&limit=100")
-            if jq -e --arg pp "$PRICE_POINT_ID" '.data[]? | select(.relationships.appPricePoint.data.id==$pp and .attributes.endDate==null)' <<<"$MANUAL" >/dev/null; then
-              echo 'PRICE_RESULT=ALREADY_4_99_EUR'
-            else
-              echo 'Existing price schedule differs from 4.99 EUR; refusing to overwrite blindly.'
-              jq '.' <<<"$MANUAL"
-              exit 2
-            fi
-          else
-            echo "Unexpected price schedule HTTP=$SCHEDULE_HTTP"
-            cat "$SCHEDULE_FILE" || true
-            exit 3
-          fi
-
-          echo '--- AGE RATING DECLARATION ---'
-          get "/v1/appInfos/$APP_INFO_ID/ageRatingDeclaration" | jq '{id:.data.id,attributes:.data.attributes}'
-
-          echo '--- APP REVIEW DETAIL ---'
-          REVIEW_FILE="$RUNNER_TEMP/review.json"
-          REVIEW_HTTP=$(curl --globoff -sS -o "$REVIEW_FILE" -w '%{http_code}' -H "Authorization: Bearer $(jwt)" "$API/v1/appStoreVersions/$VERSION_ID/appStoreReviewDetail" || true)
-          echo "REVIEW_HTTP=$REVIEW_HTTP"
-          if [ "$REVIEW_HTTP" = "200" ]; then jq '{id:.data.id,attributes:.data.attributes}' "$REVIEW_FILE"; else cat "$REVIEW_FILE" || true; fi
-
-          echo '--- SCREENSHOT SETS ---'
-          get "/v1/appStoreVersionLocalizations/$LOC_ID/appScreenshotSets?limit=50" | jq '[.data[] | {id,displayType:.attributes.screenshotDisplayType}]'
-
-          echo '--- VERSION/BUILD ---'
-          get "/v1/appStoreVersions/$VERSION_ID?include=build" | jq '{version:.data.attributes.versionString,state:.data.attributes.appStoreState,build:(.included[]? | select(.type=="builds") | {id,version:.attributes.version,processingState:.attributes.processingState})}'
-
-      - name: Remove ASC key
-        if: always()
-        shell: bash
-        run: rm -f "$HOME/.appstoreconnect/private_keys"/AuthKey_*.p8
+        run: bash .github/scripts/volumecalc_description_update.sh
