@@ -1,0 +1,166 @@
+name: VolumeCalc Compliance Finalize
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/volumecalc-compliance-request.json'
+
+permissions:
+  contents: read
+
+jobs:
+  finalize:
+    runs-on: macos-26
+    timeout-minutes: 12
+    env:
+      APP_ID: '6804672773'
+      APP_INFO_ID: 'b3ce09f2-a3d4-4681-a5e9-315326a8dc6f'
+      VERSION_ID: 'ca53ae3a-fb00-4a93-9203-b69b2c6845d5'
+      BUILD_ID: '0645f390-218a-42a4-a230-8bf3ea2a6978'
+      PRICE_POINT_ID: 'eyJzIjoiNjgwNDY3Mjc3MyIsInQiOiJERVUiLCJwIjoiMTAwNjIifQ'
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prepare App Store Connect token
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEY_PATH="$RUNNER_TEMP/AuthKey_${ASC_KEY_ID}.p8"
+          printf '%s' "$ASC_PRIVATE_KEY_B64" | tr -d '\r\n ' | base64 --decode > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          export ASC_KEY_PATH="$KEY_PATH"
+          JWT=$(ruby <<'RUBY'
+          require 'openssl'; require 'base64'; require 'json'
+          def b(v); Base64.urlsafe_encode64(v,padding:false); end
+          key=OpenSSL::PKey.read(File.read(ENV.fetch('ASC_KEY_PATH'))); now=Time.now.to_i
+          h=b(JSON.generate({alg:'ES256',kid:ENV.fetch('ASC_KEY_ID'),typ:'JWT'})); p=b(JSON.generate({iss:ENV.fetch('ASC_ISSUER_ID'),iat:now,exp:now+900,aud:'appstoreconnect-v1'})); s="#{h}.#{p}"
+          seq=OpenSSL::ASN1.decode(key.sign(OpenSSL::Digest::SHA256.new,s)); raw=seq.value.map{|i|[i.value.to_i.to_s(16).rjust(64,'0')].pack('H*')}.join
+          puts "#{s}.#{b(raw)}"
+          RUBY
+          )
+          echo "ASC_TOKEN=$JWT" >> "$GITHUB_ENV"
+
+      - name: Verify 4.99 EUR price
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL="https://api.appstoreconnect.apple.com/v1/appPriceSchedules/${APP_ID}/manualPrices?include=appPricePoint,territory&limit=100"
+          OUT="$RUNNER_TEMP/prices.json"
+          CODE=$(curl --no-fail --no-fail-with-body --globoff -sS -o "$OUT" -w '%{http_code}' -H "Authorization: Bearer $ASC_TOKEN" "$URL")
+          echo "manualPrices HTTP=$CODE"
+          test "$CODE" = 200
+          jq '[.data[] | {id,startDate:.attributes.startDate,endDate:.attributes.endDate,pricePoint:.relationships.appPricePoint.data.id,territory:.relationships.territory.data.id}]' "$OUT"
+          jq -e --arg pp "$PRICE_POINT_ID" '.data[] | select(.relationships.appPricePoint.data.id==$pp and .attributes.endDate==null)' "$OUT" >/dev/null
+          echo 'Verified active base price: Germany 4.99 EUR.'
+
+      - name: Set export compliance for build 2
+        shell: bash
+        run: |
+          set -euo pipefail
+          BODY=$(jq -nc --arg id "$BUILD_ID" '{data:{type:"builds",id:$id,attributes:{usesNonExemptEncryption:false}}}')
+          curl --fail-with-body -sS -X PATCH -H "Authorization: Bearer $ASC_TOKEN" -H 'Content-Type: application/json' -d "$BODY" "https://api.appstoreconnect.apple.com/v1/builds/$BUILD_ID" >/dev/null
+          CHECK=$(curl --fail-with-body -sS -H "Authorization: Bearer $ASC_TOKEN" "https://api.appstoreconnect.apple.com/v1/builds/$BUILD_ID")
+          test "$(jq -r '.data.attributes.usesNonExemptEncryption' <<<"$CHECK")" = false
+          echo 'Export compliance: usesNonExemptEncryption=false.'
+
+      - name: Complete age rating declaration
+        shell: bash
+        run: |
+          set -euo pipefail
+          AGE=$(curl --fail-with-body -sS -H "Authorization: Bearer $ASC_TOKEN" "https://api.appstoreconnect.apple.com/v1/appInfos/$APP_INFO_ID/ageRatingDeclaration")
+          AGE_ID=$(jq -r '.data.id' <<<"$AGE")
+          ATTR=$(jq -nc '{advertising:false,alcoholTobaccoOrDrugUseOrReferences:"NONE",contests:"NONE",gambling:false,gamblingSimulated:"NONE",gunsOrOtherWeapons:"NONE",healthOrWellnessTopics:false,lootBox:false,medicalOrTreatmentInformation:"NONE",messagingAndChat:false,parentalControls:false,profanityOrCrudeHumor:"NONE",ageAssurance:false,sexualContentGraphicAndNudity:"NONE",sexualContentOrNudity:"NONE",socialMedia:false,socialMediaAgeRestricted:false,horrorOrFearThemes:"NONE",matureOrSuggestiveThemes:"NONE",unrestrictedWebAccess:false,userGeneratedContent:false,violenceCartoonOrFantasy:"NONE",violenceRealisticProlongedGraphicOrSadistic:"NONE",violenceRealistic:"NONE",ageRatingOverrideV2:"NONE",koreaAgeRatingOverride:"NONE"}')
+          BODY=$(jq -nc --arg id "$AGE_ID" --argjson a "$ATTR" '{data:{type:"ageRatingDeclarations",id:$id,attributes:$a}}')
+          curl --fail-with-body -sS -X PATCH -H "Authorization: Bearer $ASC_TOKEN" -H 'Content-Type: application/json' -d "$BODY" "https://api.appstoreconnect.apple.com/v1/ageRatingDeclarations/$AGE_ID" >/dev/null
+          CHECK=$(curl --fail-with-body -sS -H "Authorization: Bearer $ASC_TOKEN" "https://api.appstoreconnect.apple.com/v1/appInfos/$APP_INFO_ID/ageRatingDeclaration")
+          test "$(jq -r '.data.attributes.advertising' <<<"$CHECK")" = false
+          test "$(jq -r '.data.attributes.gambling' <<<"$CHECK")" = false
+          test "$(jq -r '.data.attributes.unrestrictedWebAccess' <<<"$CHECK")" = false
+          test "$(jq -r '.data.attributes.violenceRealistic' <<<"$CHECK")" = NONE
+          INFO=$(curl --fail-with-body -sS -H "Authorization: Bearer $ASC_TOKEN" "https://api.appstoreconnect.apple.com/v1/appInfos/$APP_INFO_ID")
+          echo "Calculated App Store age rating: $(jq -r '.data.attributes.appStoreAgeRating // "pending-calculation"' <<<"$INFO")"
+
+      - name: Resolve existing App Review contact
+        shell: bash
+        run: |
+          set -euo pipefail
+          api(){ curl --no-fail --no-fail-with-body --globoff -sS -H "Authorization: Bearer $ASC_TOKEN" -H 'Accept: application/json' "https://api.appstoreconnect.apple.com$1"; }
+          APPS=$(api '/v1/apps?limit=200')
+          CONTACT=''
+          while read -r aid; do
+            [[ -z "$aid" || "$aid" == "$APP_ID" ]] && continue
+            VERS=$(api "/v1/apps/${aid}/appStoreVersions?filter%5Bplatform%5D=IOS&limit=50" || true)
+            while read -r vid; do
+              [[ -z "$vid" ]] && continue
+              D=$(api "/v1/appStoreVersions/${vid}/appStoreReviewDetail" || true)
+              F=$(jq -r '.data.attributes.contactFirstName // empty' <<<"$D" 2>/dev/null || true)
+              L=$(jq -r '.data.attributes.contactLastName // empty' <<<"$D" 2>/dev/null || true)
+              P=$(jq -r '.data.attributes.contactPhone // empty' <<<"$D" 2>/dev/null || true)
+              E=$(jq -r '.data.attributes.contactEmail // empty' <<<"$D" 2>/dev/null || true)
+              if [[ -n "$F" && -n "$L" && -n "$P" && -n "$E" ]]; then
+                CONTACT=$(jq -nc --arg f "$F" --arg l "$L" --arg p "$P" --arg e "$E" '{first:$f,last:$l,phone:$p,email:$e}')
+                break 2
+              fi
+            done < <(jq -r '.data[]?.id' <<<"$VERS" 2>/dev/null || true)
+          done < <(jq -r '.data[]?.id' <<<"$APPS")
+          test -n "$CONTACT"
+          echo "CONTACT_B64=$(printf '%s' "$CONTACT" | base64 | tr -d '\r\n')" >> "$GITHUB_ENV"
+          echo 'Reusable App Review contact found.'
+
+      - name: Write VolumeCalc App Review information
+        shell: bash
+        run: |
+          set -euo pipefail
+          C=$(printf '%s' "$CONTACT_B64" | base64 --decode)
+          F=$(jq -r '.first' <<<"$C"); L=$(jq -r '.last' <<<"$C"); P=$(jq -r '.phone' <<<"$C"); E=$(jq -r '.email' <<<"$C")
+          NOTES=$(cat <<'EOF'
+VolumeCalc requires no sign-in, account or network connection. All core calculations work offline and projects are stored locally on the device.
+
+Suggested review path:
+1. Tap the + button or "Erstes Bauteil hinzufügen".
+2. Add a pipe using a preset or a custom inner diameter and length.
+3. Add floor/wall/ceiling heating or a radiator. Panel-radiator references and steel/cast-iron sectional radiator references are provided as working values; manufacturer values can be entered manually.
+4. Add buffer/storage, heat generator, hydraulic separator, distributor/collector, heat exchanger or any known manual water volume.
+5. The main screen shows calculated system volume and a separately configurable planning reserve.
+6. Results can be shared through the standard iOS share sheet.
+
+There are no in-app purchases, subscriptions, ads, external payment methods, user accounts or server-backed user content. VolumeCalc is sold as a one-time paid App Store download.
+EOF
+          )
+          ATTR=$(jq -nc --arg f "$F" --arg l "$L" --arg p "$P" --arg e "$E" --arg n "$NOTES" '{contactFirstName:$f,contactLastName:$l,contactPhone:$p,contactEmail:$e,demoAccountRequired:false,notes:$n}')
+          EXIST=$(curl --no-fail --no-fail-with-body -sS -H "Authorization: Bearer $ASC_TOKEN" "https://api.appstoreconnect.apple.com/v1/appStoreVersions/$VERSION_ID/appStoreReviewDetail")
+          RID=$(jq -r '.data.id // empty' <<<"$EXIST" 2>/dev/null || true)
+          if [[ -n "$RID" ]]; then
+            BODY=$(jq -nc --arg id "$RID" --argjson a "$ATTR" '{data:{type:"appStoreReviewDetails",id:$id,attributes:$a}}')
+            curl --fail-with-body -sS -X PATCH -H "Authorization: Bearer $ASC_TOKEN" -H 'Content-Type: application/json' -d "$BODY" "https://api.appstoreconnect.apple.com/v1/appStoreReviewDetails/$RID" >/dev/null
+          else
+            BODY=$(jq -nc --arg vid "$VERSION_ID" --argjson a "$ATTR" '{data:{type:"appStoreReviewDetails",attributes:$a,relationships:{appStoreVersion:{data:{type:"appStoreVersions",id:$vid}}}}}')
+            curl --fail-with-body -sS -X POST -H "Authorization: Bearer $ASC_TOKEN" -H 'Content-Type: application/json' -d "$BODY" 'https://api.appstoreconnect.apple.com/v1/appStoreReviewDetails' >/dev/null
+          fi
+          CHECK=$(curl --fail-with-body -sS -H "Authorization: Bearer $ASC_TOKEN" "https://api.appstoreconnect.apple.com/v1/appStoreVersions/$VERSION_ID/appStoreReviewDetail")
+          test -n "$(jq -r '.data.attributes.contactPhone // empty' <<<"$CHECK")"
+          test "$(jq -r '.data.attributes.demoAccountRequired' <<<"$CHECK")" = false
+          test -n "$(jq -r '.data.attributes.notes // empty' <<<"$CHECK")"
+          echo 'App Review information completed.'
+
+      - name: Final ASC state
+        shell: bash
+        run: |
+          set -euo pipefail
+          V=$(curl --fail-with-body -sS -H "Authorization: Bearer $ASC_TOKEN" "https://api.appstoreconnect.apple.com/v1/appStoreVersions/$VERSION_ID?include=build")
+          I=$(curl --fail-with-body -sS -H "Authorization: Bearer $ASC_TOKEN" "https://api.appstoreconnect.apple.com/v1/appInfos/$APP_INFO_ID")
+          R=$(curl --fail-with-body -sS -H "Authorization: Bearer $ASC_TOKEN" "https://api.appstoreconnect.apple.com/v1/appStoreVersions/$VERSION_ID/appStoreReviewDetail")
+          echo "Version state: $(jq -r '.data.attributes.appStoreState' <<<"$V")"
+          echo "Age rating: $(jq -r '.data.attributes.appStoreAgeRating // "pending"' <<<"$I")"
+          echo "Build: $(jq -r '.included[]? | select(.type=="builds") | .attributes.version' <<<"$V")"
+          echo "Review contact set: $(jq -r '(.data.attributes.contactEmail // "") | length > 0' <<<"$R")"
+
+      - name: Remove key
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP"/AuthKey_*.p8
