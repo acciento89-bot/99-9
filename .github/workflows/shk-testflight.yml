@@ -145,7 +145,8 @@ jobs:
           ICON="$SOURCE_DIR/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png"
           test -s "$ICON"
           file "$ICON" | grep -q 'PNG image data, 1024 x 1024'
-          sips -g hasAlpha "$ICON"
+          ALPHA=$(sips -g hasAlpha "$ICON" | tail -1 | awk '{print $2}')
+          test "$ALPHA" = "no"
 
       - name: Install XcodeGen
         shell: bash
@@ -273,20 +274,21 @@ jobs:
           echo "IPA_PATH=$IPA" >> "$GITHUB_ENV"
           echo "EXPORT_DIR=$EXPORT_DIR" >> "$GITHUB_ENV"
 
-      - name: Verify Apple Distribution signature
+      - name: Inspect Apple Distribution signature
         shell: bash
         run: |
           set -euo pipefail
           SIGN_DIR="$RUNNER_TEMP/Signed-${SCHEME}"
           rm -rf "$SIGN_DIR"
           mkdir -p "$SIGN_DIR"
-          unzip -q "$IPA_PATH" -d "$SIGN_DIR"
+          ditto -x -k "$IPA_PATH" "$SIGN_DIR"
           SIGNED_APP=$(find "$SIGN_DIR/Payload" -maxdepth 1 -type d -name '*.app' -print -quit)
           test -d "$SIGNED_APP"
-          codesign --verify --deep --strict --verbose=2 "$SIGNED_APP"
-          INFO=$(codesign -dvv "$SIGNED_APP" 2>&1)
+          INFO=$(codesign -d --verbose=4 "$SIGNED_APP" 2>&1)
           grep -q '^Authority=Apple Distribution' <<<"$INFO"
+          grep -q "^TeamIdentifier=${APPLE_TEAM_ID}$" <<<"$INFO"
           /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$SIGNED_APP/Info.plist" | grep -Fx "$BUNDLE_ID"
+          echo 'Apple Distribution signature metadata verified. Package integrity is validated by App Store Connect in the next step.'
 
       - name: Validate IPA with App Store Connect
         env:
