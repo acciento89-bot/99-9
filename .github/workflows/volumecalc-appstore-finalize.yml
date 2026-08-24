@@ -1,0 +1,196 @@
+name: VolumeCalc App Store Finalize
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/volumecalc-store-request.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  VOLUMECALC_BUNDLE_ID: de.kamilunavo.volumecalc
+
+jobs:
+  finalize:
+    runs-on: macos-26
+    timeout-minutes: 35
+    steps:
+      - name: Checkout request
+        uses: actions/checkout@v5
+
+      - name: Resolve request
+        shell: bash
+        run: |
+          set -euo pipefail
+          REQUEST=.github/volumecalc-store-request.json
+          test -f "$REQUEST"
+          echo "RELEASE_VERSION=$(jq -r '.marketing_version' "$REQUEST")" >> "$GITHUB_ENV"
+          echo "RELEASE_BUILD=$(jq -r '.build_number' "$REQUEST")" >> "$GITHUB_ENV"
+          echo "STORE_LOCALE=$(jq -r '.locale // "de-DE"' "$REQUEST")" >> "$GITHUB_ENV"
+          echo "STORE_PRICE_EUR=$(jq -r '.price_eur // "4.99"' "$REQUEST")" >> "$GITHUB_ENV"
+
+      - name: Install App Store Connect API key
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$ASC_ISSUER_ID"
+          test -n "$ASC_KEY_ID"
+          test -n "$ASC_PRIVATE_KEY_B64"
+          KEY_DIR="$HOME/.appstoreconnect/private_keys"
+          mkdir -p "$KEY_DIR"
+          KEY_PATH="$KEY_DIR/AuthKey_${ASC_KEY_ID}.p8"
+          printf '%s' "$ASC_PRIVATE_KEY_B64" | tr -d '\r\n ' | base64 --decode > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          grep -q 'PRIVATE KEY' "$KEY_PATH"
+          echo "ASC_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Finalize App Store Connect metadata
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          API='https://api.appstoreconnect.apple.com'
+
+          jwt() {
+            ruby <<'RUBY'
+          require 'openssl'; require 'base64'; require 'json'
+          def b(v); Base64.urlsafe_encode64(v,padding:false); end
+          key=OpenSSL::PKey.read(File.read(ENV.fetch('ASC_KEY_PATH'))); now=Time.now.to_i
+          h=b(JSON.generate({alg:'ES256',kid:ENV.fetch('ASC_KEY_ID'),typ:'JWT'}))
+          p=b(JSON.generate({iss:ENV.fetch('ASC_ISSUER_ID'),iat:now,exp:now+900,aud:'appstoreconnect-v1'}))
+          s="#{h}.#{p}"
+          seq=OpenSSL::ASN1.decode(key.sign(OpenSSL::Digest::SHA256.new,s))
+          raw=seq.value.map{|i|[i.value.to_i.to_s(16).rjust(64,'0')].pack('H*')}.join
+          puts "#{s}.#{b(raw)}"
+          RUBY
+          }
+
+          get() {
+            curl --globoff --fail-with-body -sS -H "Authorization: Bearer $(jwt)" "$API$1"
+          }
+          post() {
+            curl --globoff --fail-with-body -sS -X POST -H "Authorization: Bearer $(jwt)" -H 'Content-Type: application/json' -d "$2" "$API$1"
+          }
+          patch() {
+            curl --globoff --fail-with-body -sS -X PATCH -H "Authorization: Bearer $(jwt)" -H 'Content-Type: application/json' -d "$2" "$API$1"
+          }
+
+          APPS=$(get "/v1/apps?filter[bundleId]=$VOLUMECALC_BUNDLE_ID&limit=10")
+          APP_ID=$(jq -r '.data[0].id // empty' <<<"$APPS")
+          test -n "$APP_ID"
+          echo "App: $APP_ID / $VOLUMECALC_BUNDLE_ID"
+
+          INFOS=$(get "/v1/apps/$APP_ID/appInfos?limit=50")
+          APP_INFO_ID=$(jq -r '.data[0].id // empty' <<<"$INFOS")
+          test -n "$APP_INFO_ID"
+          echo "App info: $APP_INFO_ID"
+
+          CATEGORY_PAYLOAD=$(jq -nc --arg id "$APP_INFO_ID" '{data:{type:"appInfos",id:$id,relationships:{primaryCategory:{data:{type:"appCategories",id:"UTILITIES"}}}}}')
+          patch "/v1/appInfos/$APP_INFO_ID" "$CATEGORY_PAYLOAD" >/dev/null
+          echo 'Primary category: Utilities'
+
+          INFO_LOCS=$(get "/v1/appInfos/$APP_INFO_ID/appInfoLocalizations?limit=50")
+          INFO_LOC_ID=$(jq -r --arg loc "$STORE_LOCALE" '.data[] | select(.attributes.locale==$loc) | .id' <<<"$INFO_LOCS" | head -1)
+          INFO_ATTRS=$(jq -nc '{name:"VolumeCalc",subtitle:"Anlagenvolumen für SHK-Profis",privacyPolicyUrl:"https://kamilunavo.com/volumecalc/privacy"}')
+          if [ -n "$INFO_LOC_ID" ]; then
+            PAYLOAD=$(jq -nc --arg id "$INFO_LOC_ID" --argjson attrs "$INFO_ATTRS" '{data:{type:"appInfoLocalizations",id:$id,attributes:$attrs}}')
+            patch "/v1/appInfoLocalizations/$INFO_LOC_ID" "$PAYLOAD" >/dev/null
+          else
+            PAYLOAD=$(jq -nc --arg loc "$STORE_LOCALE" --arg info "$APP_INFO_ID" --argjson attrs "$INFO_ATTRS" '{data:{type:"appInfoLocalizations",attributes:($attrs+{locale:$loc}),relationships:{appInfo:{data:{type:"appInfos",id:$info}}}}}')
+            CREATED=$(post '/v1/appInfoLocalizations' "$PAYLOAD")
+            INFO_LOC_ID=$(jq -r '.data.id' <<<"$CREATED")
+          fi
+          echo "App info localization: $STORE_LOCALE / $INFO_LOC_ID"
+
+          VERSIONS=$(get "/v1/apps/$APP_ID/appStoreVersions?filter[platform]=IOS&filter[versionString]=$RELEASE_VERSION&limit=50")
+          VERSION_ID=$(jq -r '.data[0].id // empty' <<<"$VERSIONS")
+          if [ -z "$VERSION_ID" ]; then
+            PAYLOAD=$(jq -nc --arg app "$APP_ID" --arg ver "$RELEASE_VERSION" '{data:{type:"appStoreVersions",attributes:{platform:"IOS",versionString:$ver,copyright:"2026 Kamilunavo",releaseType:"MANUAL",usesIdfa:false},relationships:{app:{data:{type:"apps",id:$app}}}}}')
+            CREATED=$(post '/v1/appStoreVersions' "$PAYLOAD")
+            VERSION_ID=$(jq -r '.data.id' <<<"$CREATED")
+            echo "Created App Store version $RELEASE_VERSION: $VERSION_ID"
+          else
+            PAYLOAD=$(jq -nc --arg id "$VERSION_ID" '{data:{type:"appStoreVersions",id:$id,attributes:{copyright:"2026 Kamilunavo",releaseType:"MANUAL",usesIdfa:false}}}')
+            patch "/v1/appStoreVersions/$VERSION_ID" "$PAYLOAD" >/dev/null
+            echo "Updated App Store version $RELEASE_VERSION: $VERSION_ID"
+          fi
+
+          DESCRIPTION='VolumeCalc ist die praktische Rechenhilfe für SHK, Kundendienst, Bestand und Planung. Statt den Wasserinhalt einer Heizungsanlage pauschal zu schätzen, stellst du die Anlage aus ihren realen wasserführenden Bauteilen zusammen.\n\nFunktionen:\n• Rohrvolumen aus echtem Innendurchmesser und Leitungslänge\n• Presets für Kupfer, Mehrschichtverbund, PE-X, Stahl-Gewinderohr schwarz/verzinkt, Siederohr, Edelstahl-Press und PP-R\n• Fußboden-, Wand- und Deckenheizung nach Rohrdimension, Länge und Heizkreisen\n• Flachheizkörper über Referenzwerte oder exakte Herstellerangaben\n• Stahl- und Guss-Gliederheizkörper mit Gliederzahl und Wasserinhalt je Glied\n• Puffer/Speicher, Wärmeerzeuger, hydraulische Weiche, Verteiler/Sammler und Wärmetauscher\n• Beliebige bekannte Hersteller- oder Messwerte ergänzen\n• Berechneten Anlageninhalt und Planungsreserve getrennt anzeigen\n• Mehrere Projekte lokal speichern und Ergebnisse teilen\n\nVolumeCalc funktioniert ohne Benutzerkonto und die Kernberechnung vollständig offline.\n\nHinweis: Referenzwerte sind eine Arbeitshilfe. Für exakte Auslegung und sicherheitsrelevante Entscheidungen haben Herstellerangaben, Normen und reale Messwerte Vorrang.'
+          PROMO='Anlagenvolumen aus realen Bauteilen berechnen – inklusive Altbau-Rohrsystemen, Stahl-/Gussheizkörpern und Flächenheizung.'
+          KEYWORDS='Anlagenvolumen,Heizung,SHK,MAG,Ausdehnungsgefäß,Heizkörper,Fußbodenheizung,Rohrvolumen,Hydraulik'
+
+          VER_LOCS=$(get "/v1/appStoreVersions/$VERSION_ID/appStoreVersionLocalizations?limit=50")
+          VER_LOC_ID=$(jq -r --arg loc "$STORE_LOCALE" '.data[] | select(.attributes.locale==$loc) | .id' <<<"$VER_LOCS" | head -1)
+          VER_ATTRS=$(jq -nc --arg desc "$DESCRIPTION" --arg promo "$PROMO" --arg keys "$KEYWORDS" '{description:$desc,promotionalText:$promo,keywords:$keys,supportUrl:"https://kamilunavo.com/support",marketingUrl:"https://kamilunavo.com"}')
+          if [ -n "$VER_LOC_ID" ]; then
+            PAYLOAD=$(jq -nc --arg id "$VER_LOC_ID" --argjson attrs "$VER_ATTRS" '{data:{type:"appStoreVersionLocalizations",id:$id,attributes:$attrs}}')
+            patch "/v1/appStoreVersionLocalizations/$VER_LOC_ID" "$PAYLOAD" >/dev/null
+          else
+            PAYLOAD=$(jq -nc --arg loc "$STORE_LOCALE" --arg ver "$VERSION_ID" --argjson attrs "$VER_ATTRS" '{data:{type:"appStoreVersionLocalizations",attributes:($attrs+{locale:$loc}),relationships:{appStoreVersion:{data:{type:"appStoreVersions",id:$ver}}}}}')
+            CREATED=$(post '/v1/appStoreVersionLocalizations' "$PAYLOAD")
+            VER_LOC_ID=$(jq -r '.data.id' <<<"$CREATED")
+          fi
+          echo "Version localization: $STORE_LOCALE / $VER_LOC_ID"
+          echo "VERSION_ID=$VERSION_ID" >> "$GITHUB_ENV"
+          echo "VERSION_LOCALIZATION_ID=$VER_LOC_ID" >> "$GITHUB_ENV"
+          echo "ASC_APP_ID=$APP_ID" >> "$GITHUB_ENV"
+
+          BUILD_ID=''
+          for attempt in $(seq 1 40); do
+            BUILDS=$(get "/v1/builds?filter[app]=$APP_ID&filter[version]=$RELEASE_BUILD&limit=50")
+            BUILD_ID=$(jq -r '.data[] | select((.attributes.processingState // "VALID") == "VALID") | .id' <<<"$BUILDS" | head -1)
+            if [ -n "$BUILD_ID" ]; then break; fi
+            echo "Build $RELEASE_BUILD not processed yet ($attempt/40)"
+            sleep 30
+          done
+          test -n "$BUILD_ID"
+          BUILD_PAYLOAD=$(jq -nc --arg id "$BUILD_ID" '{data:{type:"builds",id:$id}}')
+          patch "/v1/appStoreVersions/$VERSION_ID/relationships/build" "$BUILD_PAYLOAD" >/dev/null
+          echo "Attached build $RELEASE_BUILD: $BUILD_ID"
+
+          PRICE_POINTS=$(get "/v1/apps/$APP_ID/appPricePoints?filter[territory]=DEU&include=territory&limit=200")
+          PRICE_POINT_ID=$(jq -r --arg p "$STORE_PRICE_EUR" '.data[] | select(.attributes.customerPrice==$p) | .id' <<<"$PRICE_POINTS" | head -1)
+          test -n "$PRICE_POINT_ID"
+          echo "German price point $STORE_PRICE_EUR EUR: $PRICE_POINT_ID"
+
+          CURRENT_PRICE_OK=false
+          set +e
+          SCHEDULE=$(get "/v1/apps/$APP_ID/appPriceSchedule")
+          SCHEDULE_RC=$?
+          set -e
+          if [ "$SCHEDULE_RC" -eq 0 ]; then
+            SCHEDULE_ID=$(jq -r '.data.id // empty' <<<"$SCHEDULE")
+            if [ -n "$SCHEDULE_ID" ]; then
+              MANUAL=$(get "/v1/appPriceSchedules/$SCHEDULE_ID/manualPrices?include=appPricePoint,territory&limit=50")
+              if jq -e --arg pp "$PRICE_POINT_ID" '.data[]? | select(.relationships.appPricePoint.data.id==$pp and .attributes.endDate==null)' <<<"$MANUAL" >/dev/null; then
+                CURRENT_PRICE_OK=true
+              fi
+            fi
+          fi
+
+          if [ "$CURRENT_PRICE_OK" = true ]; then
+            echo "Price already set to $STORE_PRICE_EUR EUR in DEU"
+          else
+            PRICE_PAYLOAD=$(jq -nc --arg app "$APP_ID" --arg pp "$PRICE_POINT_ID" '{data:{type:"appPriceSchedules",relationships:{app:{data:{type:"apps",id:$app}},baseTerritory:{data:{type:"territories",id:"DEU"}},manualPrices:{data:[{type:"appPrices",id:"manualPrice-0"}]}}},included:[{type:"appPrices",id:"manualPrice-0",relationships:{appPricePoint:{data:{type:"appPricePoints",id:$pp}}}}]}')
+            post '/v1/appPriceSchedules' "$PRICE_PAYLOAD" >/dev/null
+            echo "Price set: $STORE_PRICE_EUR EUR / base territory DEU"
+          fi
+
+          VERSION=$(get "/v1/appStoreVersions/$VERSION_ID?include=build,appStoreVersionLocalizations")
+          echo '--- FINAL VERSION STATE ---'
+          jq '{id:.data.id,attributes:.data.attributes,build:(.included[]? | select(.type=="builds") | {id,attributes})}' <<<"$VERSION"
+
+      - name: Remove App Store Connect key
+        if: always()
+        shell: bash
+        run: |
+          rm -f "$HOME/.appstoreconnect/private_keys"/AuthKey_*.p8
