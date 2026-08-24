@@ -1,10 +1,10 @@
 {
-  "run_id": 32756279073,
-  "run_url": "https://github.com/acciento89-bot/99-9/actions/runs/32756279073",
+  "run_id": 32756809802,
+  "run_url": "https://github.com/acciento89-bot/99-9/actions/runs/32756809802",
   "conclusion": "success",
-  "head_sha": "ca8b2ef6faca19892e67b6bd60b971641582a41e",
+  "head_sha": "76e186c8ed04e1fe34bd0094b41e6a1f58270a26",
   "event": "push",
-  "app": "lueftungscalc",
+  "app": "heizkoerpercalc",
   "marketing_version": "1.0",
   "build_number": "1",
   "source_ref": "main"
