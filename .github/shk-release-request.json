@@ -1,8 +1,8 @@
 {
   "repository": "acciento89-bot/SHK",
-  "app": "rohrcalc",
+  "app": "anlagencheck",
   "source_ref": "main",
   "marketing_version": "1.0",
   "build_number": "1",
-  "attempt": 7
+  "attempt": 8
 }
