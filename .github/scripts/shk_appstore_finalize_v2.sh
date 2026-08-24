@@ -13,18 +13,18 @@ p = Path(sys.argv[1])
 s = p.read_text()
 pattern = re.compile(r'''  # Explicit export-compliance declaration in ASC too; Info\.plist already carries the same declaration\.\n  body=\$\(jq -nc --arg id "\$build_id" '\{data:\{type:"builds",id:\$id,attributes:\{usesNonExemptEncryption:false\}\}\}'\)\n  f="\$RUNNER_TEMP/\$key-compliance\.json"\n  code=\$\(raw_patch "/v1/builds/\$build_id" "\$body" "\$f"\)\n  require_code 200 "\$code" "\$f" "\$name: export compliance"\n  echo 'EXPORT_COMPLIANCE=NO_NONEXEMPT_ENCRYPTION'\n''')
 replacement = '''  # Explicit export-compliance declaration in ASC too; Info.plist already carries the same declaration.
-  # Apple makes this write-once. If Build 2 already says false, verify and continue.
+  # Apple makes this write-once. Preserve an actual boolean false instead of treating it like a missing value.
   f="$RUNNER_TEMP/$key-compliance-current.json"
   code=$(raw_get "/v1/builds/$build_id" "$f")
   require_code 200 "$code" "$f" "$name: read export compliance"
   local encryption_value
-  encryption_value=$(jq -r '.data.attributes.usesNonExemptEncryption // "UNSET"' "$f")
+  encryption_value=$(jq -r 'if (.data.attributes | has("usesNonExemptEncryption")) then (.data.attributes.usesNonExemptEncryption | tostring) else "UNSET" end' "$f")
   if [[ "$encryption_value" == 'UNSET' ]]; then
     body=$(jq -nc --arg id "$build_id" '{data:{type:"builds",id:$id,attributes:{usesNonExemptEncryption:false}}}')
     f="$RUNNER_TEMP/$key-compliance-set.json"
     code=$(raw_patch "/v1/builds/$build_id" "$body" "$f")
     require_code 200 "$code" "$f" "$name: set export compliance"
-    encryption_value=$(jq -r '.data.attributes.usesNonExemptEncryption' "$f")
+    encryption_value=$(jq -r '.data.attributes.usesNonExemptEncryption | tostring' "$f")
   fi
   [[ "$encryption_value" == 'false' ]] || { echo "ERROR: $name export compliance is $encryption_value, expected false"; exit 1; }
   echo 'EXPORT_COMPLIANCE=NO_NONEXEMPT_ENCRYPTION'
