@@ -1,8 +1,8 @@
 {
-  "run_id": 32771686904,
-  "run_url": "https://github.com/acciento89-bot/99-9/actions/runs/32771686904",
+  "run_id": 32771722225,
+  "run_url": "https://github.com/acciento89-bot/99-9/actions/runs/32771722225",
   "conclusion": "success",
-  "head_sha": "c16ee42323dd9330f0959da20d40cc8517d19855",
+  "head_sha": "0c83343ec962f13d63dcfd79ec563d82c5df3214",
   "event": "push",
   "app": "anlagencheck",
   "marketing_version": "1.0",
