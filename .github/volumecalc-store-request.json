@@ -1,0 +1,9 @@
+{
+  "app": "VolumeCalc",
+  "bundle_id": "de.kamilunavo.volumecalc",
+  "marketing_version": "1.0",
+  "build_number": "2",
+  "locale": "de-DE",
+  "price_eur": "4.99",
+  "requested_at": "2026-08-24"
+}
