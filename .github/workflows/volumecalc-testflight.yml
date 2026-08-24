@@ -1,0 +1,172 @@
+name: VolumeCalc TestFlight Bridge
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: VolumeCalc branch/tag/commit
+        required: true
+        default: main
+        type: string
+      marketing_version:
+        description: App version
+        required: true
+        default: "1.0"
+        type: string
+      build_number:
+        description: TestFlight build number
+        required: true
+        default: "1"
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  VOLUMECALC_REPO: acciento89-bot/AnlagenVolumen
+  VOLUMECALC_BUNDLE_ID: de.kamilunavo.volumecalc
+  APPLE_TEAM_ID: TKG684N5GL
+
+jobs:
+  build-and-upload:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Checkout VolumeCalc
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.VOLUMECALC_REPO }}
+          ref: ${{ inputs.source_ref }}
+          path: volumecalc
+
+      - name: Verify VolumeCalc identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd volumecalc
+          grep -q 'PRODUCT_BUNDLE_IDENTIFIER = de.kamilunavo.volumecalc' AnlagenVolumen.xcodeproj/project.pbxproj
+          grep -q 'INFOPLIST_KEY_CFBundleDisplayName = VolumeCalc' AnlagenVolumen.xcodeproj/project.pbxproj
+          grep -q '\*\*SKU:\*\* volumecalc-001' APP_STORE.md
+          xcodebuild -project AnlagenVolumen.xcodeproj -scheme VolumeCalc -list
+
+      - name: Run VolumeCalc core tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd volumecalc
+          swift test
+
+      - name: Install App Store Connect API key
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$ASC_ISSUER_ID"
+          test -n "$ASC_KEY_ID"
+          test -n "$ASC_PRIVATE_KEY_B64"
+          KEY_DIR="$HOME/.appstoreconnect/private_keys"
+          mkdir -p "$KEY_DIR"
+          KEY_PATH="$KEY_DIR/AuthKey_${ASC_KEY_ID}.p8"
+          printf '%s' "$ASC_PRIVATE_KEY_B64" | tr -d '\r\n ' | base64 --decode > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          grep -q 'PRIVATE KEY' "$KEY_PATH"
+          echo "ASC_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Archive signed VolumeCalc
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd volumecalc
+          ARCHIVE="$RUNNER_TEMP/VolumeCalc.xcarchive"
+          xcodebuild \
+            -project AnlagenVolumen.xcodeproj \
+            -scheme VolumeCalc \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$ARCHIVE" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGN_STYLE=Automatic \
+            PRODUCT_BUNDLE_IDENTIFIER="$VOLUMECALC_BUNDLE_ID" \
+            MARKETING_VERSION='${{ inputs.marketing_version }}' \
+            CURRENT_PROJECT_VERSION='${{ inputs.build_number }}' \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            clean archive
+          test -d "$ARCHIVE"
+          /usr/libexec/PlistBuddy -c 'Print :ApplicationProperties:CFBundleIdentifier' "$ARCHIVE/Info.plist" | grep -Fx "$VOLUMECALC_BUNDLE_ID"
+
+      - name: Export App Store IPA
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>teamID</key><string>${APPLE_TEAM_ID}</string>
+            <key>uploadSymbols</key><true/>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict></plist>
+          PLIST
+          rm -rf "$RUNNER_TEMP/VolumeCalcExport"
+          xcodebuild \
+            -exportArchive \
+            -archivePath "$RUNNER_TEMP/VolumeCalc.xcarchive" \
+            -exportPath "$RUNNER_TEMP/VolumeCalcExport" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+          IPA=$(find "$RUNNER_TEMP/VolumeCalcExport" -maxdepth 1 -name '*.ipa' -print -quit)
+          test -n "$IPA"
+          echo "VOLUMECALC_IPA=$IPA" >> "$GITHUB_ENV"
+
+      - name: Validate IPA with App Store Connect
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcrun altool --validate-app \
+            --file "$VOLUMECALC_IPA" \
+            --type ios \
+            --apiKey "$ASC_KEY_ID" \
+            --apiIssuer "$ASC_ISSUER_ID" \
+            --output-format json
+
+      - name: Upload VolumeCalc to TestFlight
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcrun altool --upload-app \
+            --file "$VOLUMECALC_IPA" \
+            --type ios \
+            --apiKey "$ASC_KEY_ID" \
+            --apiIssuer "$ASC_ISSUER_ID" \
+            --output-format json
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VolumeCalc-${{ inputs.marketing_version }}-${{ inputs.build_number }}
+          path: ${{ env.VOLUMECALC_IPA }}
+          if-no-files-found: error
+          retention-days: 14
