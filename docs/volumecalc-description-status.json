@@ -1,0 +1,10 @@
+{
+  "app": "VolumeCalc",
+  "version": "1.0",
+  "build": "2",
+  "description_verified_in_app_store_connect": true,
+  "literal_backslash_n_present": false,
+  "apple_standard_eula_present": true,
+  "apple_standard_eula_url": "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/",
+  "verified_at": "2026-08-24"
+}
