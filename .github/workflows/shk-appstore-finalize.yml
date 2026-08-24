@@ -1,0 +1,48 @@
+name: SHK App Store Finalize and Submit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/shk-store-finalize-request.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  finalize:
+    runs-on: macos-26
+    timeout-minutes: 35
+    steps:
+      - name: Checkout bridge
+        uses: actions/checkout@v5
+        with:
+          path: bridge
+
+      - name: Verify explicit finalization request
+        shell: bash
+        run: |
+          set -euo pipefail
+          REQUEST='bridge/.github/shk-store-finalize-request.json'
+          test -s "$REQUEST"
+          jq -e '.repository == "acciento89-bot/SHK"' "$REQUEST" >/dev/null
+          jq -e '.version == "1.0" and .build == "2"' "$REQUEST" >/dev/null
+          jq -e '.submit_for_review == true and .release_after_approval == true' "$REQUEST" >/dev/null
+          jq -e '.apps | sort == ["anlagencheck","heizkoerpercalc","kaltecalc","lueftungscalc","rohrcalc"]' "$REQUEST" >/dev/null
+          echo 'Explicit five-app submission request verified.'
+
+      - name: Checkout SHK Suite
+        uses: actions/checkout@v5
+        with:
+          repository: acciento89-bot/SHK
+          ref: main
+          path: shk
+
+      - name: Finalize and submit all five SHK apps
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
+        shell: bash
+        run: bash bridge/.github/scripts/shk_appstore_finalize.sh
