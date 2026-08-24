@@ -72,6 +72,12 @@ if old not in s:
     raise SystemExit('Expected price schedule block not found')
 s = s.replace(old, new, 1)
 
+# Patch 3: ASC now requires local inline IDs in ${local-id} format.
+count = s.count('manualPrice-0')
+if count != 2:
+    raise SystemExit(f'Expected exactly 2 legacy price local IDs, found {count}')
+s = s.replace('manualPrice-0', '${manualPrice}', 2)
+
 p.write_text(s)
 PY
 
