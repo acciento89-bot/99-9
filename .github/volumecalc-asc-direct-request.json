@@ -4,5 +4,6 @@
   "version": "1.0",
   "build": "2",
   "price_eur": "4.99",
-  "requested_at": "2026-08-24"
+  "requested_at": "2026-08-24",
+  "final_pass": 3
 }
