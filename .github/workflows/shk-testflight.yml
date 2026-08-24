@@ -1,0 +1,367 @@
+name: SHK TestFlight Bridge
+
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: SHK app
+        required: true
+        default: kaltecalc
+        type: choice
+        options:
+          - kaltecalc
+          - lueftungscalc
+          - heizkoerpercalc
+          - rohrcalc
+          - anlagencheck
+      source_ref:
+        description: SHK branch/tag/commit
+        required: true
+        default: main
+        type: string
+      marketing_version:
+        description: App version
+        required: true
+        default: "1.0"
+        type: string
+      build_number:
+        description: TestFlight build number
+        required: true
+        default: "1"
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - '.github/shk-release-request.json'
+
+permissions:
+  contents: read
+
+env:
+  SHK_REPO: acciento89-bot/SHK
+  APPLE_TEAM_ID: TKG684N5GL
+
+jobs:
+  build-and-upload:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - name: Checkout bridge request
+        uses: actions/checkout@v5
+        with:
+          path: bridge
+
+      - name: Resolve SHK release request
+        id: release
+        shell: bash
+        env:
+          DISPATCH_APP: ${{ inputs.app }}
+          DISPATCH_SOURCE_REF: ${{ inputs.source_ref }}
+          DISPATCH_VERSION: ${{ inputs.marketing_version }}
+          DISPATCH_BUILD: ${{ inputs.build_number }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            APP_KEY="$DISPATCH_APP"
+            SOURCE_REF="$DISPATCH_SOURCE_REF"
+            RELEASE_VERSION="$DISPATCH_VERSION"
+            RELEASE_BUILD="$DISPATCH_BUILD"
+          else
+            REQUEST="bridge/.github/shk-release-request.json"
+            test -s "$REQUEST"
+            jq -e '.repository == "acciento89-bot/SHK"' "$REQUEST" >/dev/null
+            APP_KEY=$(jq -er '.app' "$REQUEST")
+            SOURCE_REF=$(jq -er '.source_ref' "$REQUEST")
+            RELEASE_VERSION=$(jq -er '.marketing_version' "$REQUEST")
+            RELEASE_BUILD=$(jq -er '.build_number' "$REQUEST")
+          fi
+
+          case "$APP_KEY" in
+            kaltecalc|lueftungscalc|heizkoerpercalc|rohrcalc|anlagencheck) ;;
+            *) echo "Unsupported app key: $APP_KEY" >&2; exit 2 ;;
+          esac
+          test -n "$SOURCE_REF"
+          test -n "$RELEASE_VERSION"
+          [[ "$RELEASE_BUILD" =~ ^[0-9]+$ ]]
+
+          echo "APP_KEY=$APP_KEY" >> "$GITHUB_ENV"
+          echo "SOURCE_REF=$SOURCE_REF" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=$RELEASE_VERSION" >> "$GITHUB_ENV"
+          echo "RELEASE_BUILD=$RELEASE_BUILD" >> "$GITHUB_ENV"
+          echo "app=$APP_KEY" >> "$GITHUB_OUTPUT"
+          echo "source_ref=$SOURCE_REF" >> "$GITHUB_OUTPUT"
+          echo "marketing_version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "build_number=$RELEASE_BUILD" >> "$GITHUB_OUTPUT"
+          printf 'Resolved SHK release: %s %s (%s) from %s\n' "$APP_KEY" "$RELEASE_VERSION" "$RELEASE_BUILD" "$SOURCE_REF"
+
+      - name: Checkout SHK
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.SHK_REPO }}
+          ref: ${{ steps.release.outputs.source_ref }}
+          path: shk
+
+      - name: Load and verify app identity
+        id: app
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd shk
+          test -s release/apps.json
+          ENTRY=$(jq -cer --arg key "$APP_KEY" '.apps[] | select(.key == $key)' release/apps.json)
+          SCHEME=$(jq -r '.scheme' <<<"$ENTRY")
+          DISPLAY_NAME=$(jq -r '.display_name' <<<"$ENTRY")
+          BUNDLE_ID=$(jq -r '.bundle_id' <<<"$ENTRY")
+          SOURCE_DIR=$(jq -r '.source_dir' <<<"$ENTRY")
+          PROJECT=$(jq -r '.project' release/apps.json)
+          TEAM_ID=$(jq -r '.team_id' release/apps.json)
+          test "$TEAM_ID" = "$APPLE_TEAM_ID"
+          test -d "$SOURCE_DIR"
+          grep -Fq "PRODUCT_BUNDLE_IDENTIFIER: $BUNDLE_ID" project.yml
+          grep -Fq "PRODUCT_NAME: $DISPLAY_NAME" project.yml
+          echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
+          echo "DISPLAY_NAME=$DISPLAY_NAME" >> "$GITHUB_ENV"
+          echo "BUNDLE_ID=$BUNDLE_ID" >> "$GITHUB_ENV"
+          echo "SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
+          echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
+          echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
+          echo "display_name=$DISPLAY_NAME" >> "$GITHUB_OUTPUT"
+          echo "bundle_id=$BUNDLE_ID" >> "$GITHUB_OUTPUT"
+          printf 'Identity verified: %s / %s / %s\n' "$DISPLAY_NAME" "$SCHEME" "$BUNDLE_ID"
+
+      - name: Run SHK core tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd shk
+          swift test
+
+      - name: Generate release app icon
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd shk
+          python3 scripts/generate_app_icon.py --app "$APP_KEY" --source-dir "$SOURCE_DIR"
+          ICON="$SOURCE_DIR/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png"
+          test -s "$ICON"
+          file "$ICON" | grep -q 'PNG image data, 1024 x 1024'
+          sips -g hasAlpha "$ICON"
+
+      - name: Install XcodeGen
+        shell: bash
+        run: brew install xcodegen
+
+      - name: Generate and verify Xcode project
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd shk
+          xcodegen generate
+          test -d "$PROJECT"
+          xcodebuild -project "$PROJECT" -scheme "$SCHEME" -list
+
+      - name: Install App Store Connect API key
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$ASC_ISSUER_ID"
+          test -n "$ASC_KEY_ID"
+          test -n "$ASC_PRIVATE_KEY_B64"
+          KEY_DIR="$HOME/.appstoreconnect/private_keys"
+          mkdir -p "$KEY_DIR"
+          KEY_PATH="$KEY_DIR/AuthKey_${ASC_KEY_ID}.p8"
+          printf '%s' "$ASC_PRIVATE_KEY_B64" | tr -d '\r\n ' | base64 --decode > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          grep -q 'PRIVATE KEY' "$KEY_PATH"
+          echo "ASC_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Verify App Store Connect app record
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          JWT=$(ruby <<'RUBY'
+          require 'openssl'; require 'base64'; require 'json'
+          def b(v); Base64.urlsafe_encode64(v,padding:false); end
+          key=OpenSSL::PKey.read(File.read(ENV.fetch('ASC_KEY_PATH'))); now=Time.now.to_i
+          h=b(JSON.generate({alg:'ES256',kid:ENV.fetch('ASC_KEY_ID'),typ:'JWT'})); p=b(JSON.generate({iss:ENV.fetch('ASC_ISSUER_ID'),iat:now,exp:now+900,aud:'appstoreconnect-v1'})); s="#{h}.#{p}"
+          seq=OpenSSL::ASN1.decode(key.sign(OpenSSL::Digest::SHA256.new,s)); raw=seq.value.map{|i|[i.value.to_i.to_s(16).rjust(64,'0')].pack('H*')}.join
+          puts "#{s}.#{b(raw)}"
+          RUBY
+          )
+          APPS=$(curl --fail-with-body -sS -G -H "Authorization: Bearer $JWT" --data-urlencode "filter[bundleId]=$BUNDLE_ID" --data-urlencode 'limit=10' 'https://api.appstoreconnect.apple.com/v1/apps')
+          APP_ID=$(jq -r '.data[0].id // empty' <<<"$APPS")
+          test -n "$APP_ID"
+          ASC_NAME=$(jq -r '.data[0].attributes.name // empty' <<<"$APPS")
+          echo "ASC_APP_ID=$APP_ID" >> "$GITHUB_ENV"
+          printf 'App Store Connect record: %s / %s / %s\n' "$ASC_NAME" "$BUNDLE_ID" "$APP_ID"
+
+      - name: Create unsigned release archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd shk
+          ARCHIVE="$RUNNER_TEMP/${SCHEME}.xcarchive"
+          rm -rf "$ARCHIVE"
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$ARCHIVE" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
+            MARKETING_VERSION="$RELEASE_VERSION" \
+            CURRENT_PROJECT_VERSION="$RELEASE_BUILD" \
+            ASSETCATALOG_COMPILER_APPICON_NAME=AppIcon \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            clean archive
+          APP=$(find "$ARCHIVE/Products/Applications" -maxdepth 1 -type d -name '*.app' -print -quit)
+          test -d "$APP"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist" | grep -Fx "$BUNDLE_ID"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist" | grep -Fx "$RELEASE_VERSION"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist" | grep -Fx "$RELEASE_BUILD"
+          test -s "$APP/Assets.car"
+          echo "ARCHIVE_PATH=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Create App Store export options
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>export</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>teamID</key><string>${APPLE_TEAM_ID}</string>
+            <key>uploadSymbols</key><true/>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict></plist>
+          PLIST
+
+      - name: Cloud-sign IPA
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPORT_DIR="$RUNNER_TEMP/${SCHEME}Export"
+          rm -rf "$EXPORT_DIR"
+          mkdir -p "$EXPORT_DIR"
+          xcodebuild \
+            -exportArchive \
+            -archivePath "$ARCHIVE_PATH" \
+            -exportPath "$EXPORT_DIR" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+          IPA=$(find "$EXPORT_DIR" -maxdepth 2 -type f -name '*.ipa' -print -quit)
+          test -n "$IPA" -a -s "$IPA"
+          echo "IPA_PATH=$IPA" >> "$GITHUB_ENV"
+          echo "EXPORT_DIR=$EXPORT_DIR" >> "$GITHUB_ENV"
+
+      - name: Verify Apple Distribution signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          SIGN_DIR="$RUNNER_TEMP/Signed-${SCHEME}"
+          rm -rf "$SIGN_DIR"
+          mkdir -p "$SIGN_DIR"
+          unzip -q "$IPA_PATH" -d "$SIGN_DIR"
+          SIGNED_APP=$(find "$SIGN_DIR/Payload" -maxdepth 1 -type d -name '*.app' -print -quit)
+          test -d "$SIGNED_APP"
+          codesign --verify --deep --strict --verbose=2 "$SIGNED_APP"
+          INFO=$(codesign -dvv "$SIGNED_APP" 2>&1)
+          grep -q '^Authority=Apple Distribution' <<<"$INFO"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$SIGNED_APP/Info.plist" | grep -Fx "$BUNDLE_ID"
+
+      - name: Validate IPA with App Store Connect
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcrun altool --validate-app \
+            --file "$IPA_PATH" \
+            --type ios \
+            --apiKey "$ASC_KEY_ID" \
+            --apiIssuer "$ASC_ISSUER_ID" \
+            --output-format json
+
+      - name: Upload to TestFlight
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcrun altool --upload-app \
+            --file "$IPA_PATH" \
+            --type ios \
+            --apiKey "$ASC_KEY_ID" \
+            --apiIssuer "$ASC_ISSUER_ID" \
+            --output-format json
+
+      - name: Wait for App Store Connect build record
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 20); do
+            JWT=$(ruby <<'RUBY'
+          require 'openssl'; require 'base64'; require 'json'
+          def b(v); Base64.urlsafe_encode64(v,padding:false); end
+          key=OpenSSL::PKey.read(File.read(ENV.fetch('ASC_KEY_PATH'))); now=Time.now.to_i
+          h=b(JSON.generate({alg:'ES256',kid:ENV.fetch('ASC_KEY_ID'),typ:'JWT'})); p=b(JSON.generate({iss:ENV.fetch('ASC_ISSUER_ID'),iat:now,exp:now+900,aud:'appstoreconnect-v1'})); s="#{h}.#{p}"
+          seq=OpenSSL::ASN1.decode(key.sign(OpenSSL::Digest::SHA256.new,s)); raw=seq.value.map{|i|[i.value.to_i.to_s(16).rjust(64,'0')].pack('H*')}.join
+          puts "#{s}.#{b(raw)}"
+          RUBY
+          )
+            BUILDS=$(curl --fail-with-body -sS -G -H "Authorization: Bearer $JWT" \
+              --data-urlencode "filter[app]=$ASC_APP_ID" \
+              --data-urlencode "filter[version]=$RELEASE_BUILD" \
+              --data-urlencode 'sort=-uploadedDate' \
+              --data-urlencode 'limit=5' \
+              'https://api.appstoreconnect.apple.com/v1/builds')
+            BUILD_ID=$(jq -r '.data[0].id // empty' <<<"$BUILDS")
+            if [[ -n "$BUILD_ID" ]]; then
+              STATE=$(jq -r '.data[0].attributes.processingState // "UNKNOWN"' <<<"$BUILDS")
+              echo "ASC_BUILD_ID=$BUILD_ID" >> "$GITHUB_ENV"
+              echo "ASC_PROCESSING_STATE=$STATE" >> "$GITHUB_ENV"
+              printf 'Build record found: %s / processingState=%s\n' "$BUILD_ID" "$STATE"
+              exit 0
+            fi
+            echo "Build record not visible yet (attempt $attempt/20)."
+            sleep 30
+          done
+          echo 'Upload succeeded but the build record is not visible yet; Apple may still be processing it.'
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.app.outputs.scheme }}-${{ steps.release.outputs.marketing_version }}-${{ steps.release.outputs.build_number }}
+          path: ${{ runner.temp }}/${{ steps.app.outputs.scheme }}Export/*.ipa
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove App Store Connect key
+        if: always()
+        shell: bash
+        run: |
+          rm -f "$HOME/.appstoreconnect/private_keys"/AuthKey_*.p8
