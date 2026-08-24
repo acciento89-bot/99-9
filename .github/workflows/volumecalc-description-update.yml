@@ -1,0 +1,27 @@
+name: VolumeCalc App Store Description Update
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/volumecalc-description-request.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  update-description:
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - name: Checkout bridge
+        uses: actions/checkout@v5
+
+      - name: Update and verify VolumeCalc description
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
+        shell: bash
+        run: bash .github/scripts/volumecalc_description_update.sh
