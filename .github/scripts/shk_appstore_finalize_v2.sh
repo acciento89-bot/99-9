@@ -78,6 +78,58 @@ if count != 2:
     raise SystemExit(f'Expected exactly 2 legacy price local IDs, found {count}')
 s = s.replace('manualPrice-0', '${manualPrice}', 2)
 
+# Patch 4: explicitly declare these first-party offline tools do not use third-party content.
+needle = '''  echo "VERSION_ID=$version_id RELEASE_TYPE=$RELEASE_TYPE"
+'''
+insert = '''  echo "VERSION_ID=$version_id RELEASE_TYPE=$RELEASE_TYPE"
+
+  body=$(jq -nc --arg id "$version_id" '{data:{type:"appStoreVersions",id:$id,attributes:{contentRightsDeclaration:"DOES_NOT_USE_THIRD_PARTY_CONTENT"}}}')
+  f="$RUNNER_TEMP/$key-content-rights.json"
+  code=$(raw_patch "/v1/appStoreVersions/$version_id" "$body" "$f")
+  require_code 200 "$code" "$f" "$name: content rights"
+  echo 'CONTENT_RIGHTS=DOES_NOT_USE_THIRD_PARTY_CONTENT'
+'''
+if needle not in s:
+    raise SystemExit('Version ID marker not found for content-rights patch')
+s = s.replace(needle, insert, 1)
+
+# Patch 5: App Privacy answers are the only App Store form not exposed by the public ASC API.
+# If Apple reports that they are not published, finish preparing this app, record the blocker,
+# and continue with the remaining apps instead of stopping at app #1.
+if 'SUBMIT_BLOCKERS=0\n\nfinalize_app() {' not in s:
+    s = s.replace('finalize_app() {', 'SUBMIT_BLOCKERS=0\n\nfinalize_app() {', 1)
+
+old_item = '''    code=$(raw_post '/v1/reviewSubmissionItems' "$body" "$f")
+    require_code 201 "$code" "$f" "$name: add version to review package"
+'''
+new_item = '''    code=$(raw_post '/v1/reviewSubmissionItems' "$body" "$f")
+    if [[ "$code" != '201' ]]; then
+      if [[ "$code" == '409' ]] && jq -e '.. | objects | select(.code? == "STATE_ERROR.APP_DATA_USAGES_REQUIRED")' "$f" >/dev/null 2>&1; then
+        echo "SUBMIT_BLOCKER=$key:APP_PRIVACY_NOT_PUBLISHED"
+        SUBMIT_BLOCKERS=$((SUBMIT_BLOCKERS + 1))
+        return 0
+      fi
+      require_code 201 "$code" "$f" "$name: add version to review package"
+    fi
+'''
+if old_item not in s:
+    raise SystemExit('Review submission item block not found')
+s = s.replace(old_item, new_item, 1)
+
+old_end = '''echo
+echo 'SHK_APPSTORE_FINALIZER_SUCCESS=1'
+'''
+new_end = '''echo
+if (( SUBMIT_BLOCKERS > 0 )); then
+  echo "SHK_APPSTORE_FINALIZER_BLOCKED_APP_PRIVACY=$SUBMIT_BLOCKERS"
+  exit 2
+fi
+echo 'SHK_APPSTORE_FINALIZER_SUCCESS=1'
+'''
+if old_end not in s:
+    raise SystemExit('Final success marker not found')
+s = s.replace(old_end, new_end, 1)
+
 p.write_text(s)
 PY
 
