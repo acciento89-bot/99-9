@@ -1,0 +1,10 @@
+{
+  "app": "VolumeCalc",
+  "repository": "acciento89-bot/AnlagenVolumen",
+  "source_ref": "main",
+  "bundle_id": "de.kamilunavo.volumecalc",
+  "sku": "volumecalc-001",
+  "marketing_version": "1.0",
+  "build_number": "1",
+  "requested_at": "2026-08-24"
+}
