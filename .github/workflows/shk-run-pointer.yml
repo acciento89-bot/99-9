@@ -1,0 +1,61 @@
+name: SHK Bridge Run Pointer
+
+on:
+  workflow_run:
+    workflows: ["SHK TestFlight Bridge"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout bridge repository
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Publish last SHK bridge run
+        env:
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          EVENT_NAME: ${{ github.event.workflow_run.event }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="unknown"
+          VERSION="unknown"
+          BUILD="unknown"
+          SOURCE_REF="unknown"
+          REQUEST=".github/shk-release-request.json"
+          if [[ -s "$REQUEST" ]]; then
+            APP=$(jq -r '.app // "unknown"' "$REQUEST")
+            VERSION=$(jq -r '.marketing_version // "unknown"' "$REQUEST")
+            BUILD=$(jq -r '.build_number // "unknown"' "$REQUEST")
+            SOURCE_REF=$(jq -r '.source_ref // "unknown"' "$REQUEST")
+          fi
+          jq -n \
+            --argjson run_id "$RUN_ID" \
+            --arg run_url "$RUN_URL" \
+            --arg conclusion "$CONCLUSION" \
+            --arg head_sha "$HEAD_SHA" \
+            --arg event "$EVENT_NAME" \
+            --arg app "$APP" \
+            --arg marketing_version "$VERSION" \
+            --arg build_number "$BUILD" \
+            --arg source_ref "$SOURCE_REF" \
+            '{run_id:$run_id,run_url:$run_url,conclusion:$conclusion,head_sha:$head_sha,event:$event,app:$app,marketing_version:$marketing_version,build_number:$build_number,source_ref:$source_ref}' \
+            > .github/shk-last-run.json
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/shk-last-run.json
+          if git diff --cached --quiet; then
+            echo 'Run pointer unchanged.'
+            exit 0
+          fi
+          git commit -m "ci: record SHK bridge run ${RUN_ID}"
+          git push origin HEAD:main
