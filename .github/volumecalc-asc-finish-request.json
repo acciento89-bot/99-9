@@ -1,0 +1,8 @@
+{
+  "app": "VolumeCalc",
+  "version": "1.0",
+  "build": "2",
+  "price_eur": "4.99",
+  "audit": true,
+  "requested_at": "2026-08-24"
+}
