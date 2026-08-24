@@ -78,14 +78,14 @@ if count != 2:
     raise SystemExit(f'Expected exactly 2 legacy price local IDs, found {count}')
 s = s.replace('manualPrice-0', '${manualPrice}', 2)
 
-# Patch 4: explicitly declare these first-party offline tools do not use third-party content.
+# Patch 4: content rights now belongs to the app resource, not appStoreVersions.
 needle = '''  echo "VERSION_ID=$version_id RELEASE_TYPE=$RELEASE_TYPE"
 '''
 insert = '''  echo "VERSION_ID=$version_id RELEASE_TYPE=$RELEASE_TYPE"
 
-  body=$(jq -nc --arg id "$version_id" '{data:{type:"appStoreVersions",id:$id,attributes:{contentRightsDeclaration:"DOES_NOT_USE_THIRD_PARTY_CONTENT"}}}')
+  body=$(jq -nc --arg id "$app_id" '{data:{type:"apps",id:$id,attributes:{contentRightsDeclaration:"DOES_NOT_USE_THIRD_PARTY_CONTENT"}}}')
   f="$RUNNER_TEMP/$key-content-rights.json"
-  code=$(raw_patch "/v1/appStoreVersions/$version_id" "$body" "$f")
+  code=$(raw_patch "/v1/apps/$app_id" "$body" "$f")
   require_code 200 "$code" "$f" "$name: content rights"
   echo 'CONTENT_RIGHTS=DOES_NOT_USE_THIRD_PARTY_CONTENT'
 '''
