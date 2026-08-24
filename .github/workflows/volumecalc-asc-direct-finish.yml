@@ -18,6 +18,14 @@ jobs:
       - name: Checkout bridge
         uses: actions/checkout@v5
 
+      - name: Update and verify VolumeCalc App Store description
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
+        shell: bash
+        run: bash .github/scripts/volumecalc_description_update.sh
+
       - name: Finalize VolumeCalc in App Store Connect
         env:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
