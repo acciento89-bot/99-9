@@ -1,0 +1,7 @@
+{
+  "app": "VolumeCalc",
+  "version": "1.0",
+  "build": "2",
+  "action": "write-clean-description-with-apple-standard-eula",
+  "requested_at": "2026-08-24T17:28:00+02:00"
+}
