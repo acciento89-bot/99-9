@@ -1,0 +1,9 @@
+{
+  "app": "VolumeCalc",
+  "action": "finalize-store-record",
+  "version": "1.0",
+  "build": "2",
+  "price_eur": "4.99",
+  "final_pass": true,
+  "requested_at": "2026-08-24"
+}
