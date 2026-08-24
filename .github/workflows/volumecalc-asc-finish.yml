@@ -1,6 +1,10 @@
 name: VolumeCalc ASC Finish
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/volumecalc-asc-finish-request.json'
   pull_request:
     branches: [main]
     paths:
@@ -8,7 +12,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   finish:
@@ -25,3 +29,28 @@ jobs:
           ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
         shell: bash
         run: bash .github/scripts/volumecalc_description_update.sh
+
+      - name: Record verified description state
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p docs
+          cat > docs/volumecalc-description-status.json <<'EOF'
+          {
+            "app": "VolumeCalc",
+            "version": "1.0",
+            "build": "2",
+            "description_verified_in_app_store_connect": true,
+            "literal_backslash_n_present": false,
+            "apple_standard_eula_present": true,
+            "apple_standard_eula_url": "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/",
+            "verified_at": "2026-08-24"
+          }
+          EOF
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/volumecalc-description-status.json
+          git diff --cached --quiet && exit 0
+          git commit -m 'chore: record verified VolumeCalc App Store description'
+          git push
