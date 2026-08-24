@@ -45,4 +45,4 @@ jobs:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
         shell: bash
-        run: bash bridge/.github/scripts/shk_appstore_finalize.sh
+        run: bash bridge/.github/scripts/shk_appstore_finalize_v2.sh
