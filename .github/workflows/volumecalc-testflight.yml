@@ -167,6 +167,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: VolumeCalc-${{ inputs.marketing_version }}-${{ inputs.build_number }}
-          path: ${{ env.VOLUMECALC_IPA }}
+          path: ${{ runner.temp }}/VolumeCalcExport/*.ipa
           if-no-files-found: error
           retention-days: 14
