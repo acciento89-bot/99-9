@@ -163,11 +163,10 @@ jobs:
           echo "German price point $STORE_PRICE_EUR EUR: $PRICE_POINT_ID"
 
           CURRENT_PRICE_OK=false
-          set +e
-          SCHEDULE=$(get "/v1/apps/$APP_ID/appPriceSchedule")
-          SCHEDULE_RC=$?
-          set -e
-          if [ "$SCHEDULE_RC" -eq 0 ]; then
+          SCHEDULE_FILE="$RUNNER_TEMP/volumecalc-price-schedule.json"
+          SCHEDULE_HTTP=$(curl --globoff -sS -o "$SCHEDULE_FILE" -w '%{http_code}' -H "Authorization: Bearer $(jwt)" "$API/v1/apps/$APP_ID/appPriceSchedule")
+          if [ "$SCHEDULE_HTTP" = "200" ]; then
+            SCHEDULE=$(cat "$SCHEDULE_FILE")
             SCHEDULE_ID=$(jq -r '.data.id // empty' <<<"$SCHEDULE")
             if [ -n "$SCHEDULE_ID" ]; then
               MANUAL=$(get "/v1/appPriceSchedules/$SCHEDULE_ID/manualPrices?include=appPricePoint,territory&limit=50")
@@ -175,6 +174,12 @@ jobs:
                 CURRENT_PRICE_OK=true
               fi
             fi
+          elif [ "$SCHEDULE_HTTP" = "404" ]; then
+            echo 'No existing price schedule; creating initial paid-app price.'
+          else
+            echo "Unexpected appPriceSchedule HTTP $SCHEDULE_HTTP"
+            cat "$SCHEDULE_FILE"
+            exit 1
           fi
 
           if [ "$CURRENT_PRICE_OK" = true ]; then
