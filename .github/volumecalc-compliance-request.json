@@ -1,0 +1,10 @@
+{
+  "app": "VolumeCalc",
+  "version": "1.0",
+  "build": "2",
+  "complete_age_rating": true,
+  "complete_review_info": true,
+  "set_export_compliance": true,
+  "verify_price": "4.99 EUR",
+  "requested_at": "2026-08-24"
+}
