@@ -87,15 +87,35 @@ jobs:
           grep -q 'PRIVATE KEY' "$KEY_PATH"
           echo "ASC_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
 
-      - name: Archive signed VolumeCalc
+      - name: Verify App Store Connect app record
         env:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
         shell: bash
         run: |
           set -euo pipefail
+          JWT=$(ruby <<'RUBY'
+          require 'openssl'; require 'base64'; require 'json'
+          def b(v); Base64.urlsafe_encode64(v,padding:false); end
+          key=OpenSSL::PKey.read(File.read(ENV.fetch('ASC_KEY_PATH'))); now=Time.now.to_i
+          h=b(JSON.generate({alg:'ES256',kid:ENV.fetch('ASC_KEY_ID'),typ:'JWT'})); p=b(JSON.generate({iss:ENV.fetch('ASC_ISSUER_ID'),iat:now,exp:now+900,aud:'appstoreconnect-v1'})); s="#{h}.#{p}"
+          seq=OpenSSL::ASN1.decode(key.sign(OpenSSL::Digest::SHA256.new,s)); raw=seq.value.map{|i|[i.value.to_i.to_s(16).rjust(64,'0')].pack('H*')}.join
+          puts "#{s}.#{b(raw)}"
+          RUBY
+          )
+          APPS=$(curl --fail-with-body -sS -G -H "Authorization: Bearer $JWT" --data-urlencode "filter[bundleId]=$VOLUMECALC_BUNDLE_ID" --data-urlencode 'limit=10' 'https://api.appstoreconnect.apple.com/v1/apps')
+          APP_ID=$(jq -r '.data[0].id // empty' <<<"$APPS")
+          test -n "$APP_ID"
+          echo "ASC_APP_ID=$APP_ID" >> "$GITHUB_ENV"
+          echo "App Store Connect app record found: $APP_ID"
+
+      - name: Create unsigned iOS release archive
+        shell: bash
+        run: |
+          set -euo pipefail
           cd volumecalc
           ARCHIVE="$RUNNER_TEMP/VolumeCalc.xcarchive"
+          rm -rf "$ARCHIVE"
           xcodebuild \
             -project AnlagenVolumen.xcodeproj \
             -scheme VolumeCalc \
@@ -103,22 +123,20 @@ jobs:
             -destination 'generic/platform=iOS' \
             -archivePath "$ARCHIVE" \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
-            CODE_SIGN_STYLE=Automatic \
             PRODUCT_BUNDLE_IDENTIFIER="$VOLUMECALC_BUNDLE_ID" \
             MARKETING_VERSION="$RELEASE_VERSION" \
             CURRENT_PROJECT_VERSION="$RELEASE_BUILD" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$ASC_KEY_PATH" \
-            -authenticationKeyID "$ASC_KEY_ID" \
-            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
             clean archive
-          test -d "$ARCHIVE"
-          /usr/libexec/PlistBuddy -c 'Print :ApplicationProperties:CFBundleIdentifier' "$ARCHIVE/Info.plist" | grep -Fx "$VOLUMECALC_BUNDLE_ID"
+          APP="$ARCHIVE/Products/Applications/VolumeCalc.app"
+          test -d "$APP"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist" | grep -Fx "$VOLUMECALC_BUNDLE_ID"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist" | grep -Fx "$RELEASE_VERSION"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist" | grep -Fx "$RELEASE_BUILD"
 
-      - name: Export App Store IPA
-        env:
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      - name: Create App Store export options
         shell: bash
         run: |
           set -euo pipefail
@@ -127,13 +145,23 @@ jobs:
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0"><dict>
             <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>export</string>
             <key>signingStyle</key><string>automatic</string>
             <key>teamID</key><string>${APPLE_TEAM_ID}</string>
             <key>uploadSymbols</key><true/>
             <key>manageAppVersionAndBuildNumber</key><false/>
           </dict></plist>
           PLIST
+
+      - name: Cloud-sign VolumeCalc IPA
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
           rm -rf "$RUNNER_TEMP/VolumeCalcExport"
+          mkdir -p "$RUNNER_TEMP/VolumeCalcExport"
           xcodebuild \
             -exportArchive \
             -archivePath "$RUNNER_TEMP/VolumeCalc.xcarchive" \
@@ -143,9 +171,22 @@ jobs:
             -authenticationKeyPath "$ASC_KEY_PATH" \
             -authenticationKeyID "$ASC_KEY_ID" \
             -authenticationKeyIssuerID "$ASC_ISSUER_ID"
-          IPA=$(find "$RUNNER_TEMP/VolumeCalcExport" -maxdepth 1 -name '*.ipa' -print -quit)
-          test -n "$IPA"
+          IPA=$(find "$RUNNER_TEMP/VolumeCalcExport" -maxdepth 2 -type f -name '*.ipa' -print -quit)
+          test -n "$IPA" -a -s "$IPA"
           echo "VOLUMECALC_IPA=$IPA" >> "$GITHUB_ENV"
+
+      - name: Verify Apple Distribution signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/SignedVolumeCalc"
+          mkdir -p "$RUNNER_TEMP/SignedVolumeCalc"
+          unzip -q "$VOLUMECALC_IPA" -d "$RUNNER_TEMP/SignedVolumeCalc"
+          SIGNED_APP=$(find "$RUNNER_TEMP/SignedVolumeCalc/Payload" -maxdepth 1 -type d -name '*.app' -print -quit)
+          test -d "$SIGNED_APP"
+          codesign --verify --deep --strict --verbose=2 "$SIGNED_APP"
+          INFO=$(codesign -dvv "$SIGNED_APP" 2>&1)
+          grep -q '^Authority=Apple Distribution' <<<"$INFO"
 
       - name: Validate IPA with App Store Connect
         env:
@@ -182,3 +223,11 @@ jobs:
           path: ${{ runner.temp }}/VolumeCalcExport/*.ipa
           if-no-files-found: error
           retention-days: 14
+
+      - name: Remove App Store Connect key
+        if: always()
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        shell: bash
+        run: |
+          rm -f "$HOME/.appstoreconnect/private_keys"/AuthKey_*.p8
