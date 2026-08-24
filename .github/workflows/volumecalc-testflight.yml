@@ -22,6 +22,10 @@ on:
     branches: [main]
     paths:
       - '.github/volumecalc-release-request.json'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/volumecalc-release-request.json'
 
 permissions:
   contents: read
