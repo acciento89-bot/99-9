@@ -1,10 +1,10 @@
 {
-  "run_id": 32755540579,
-  "run_url": "https://github.com/acciento89-bot/99-9/actions/runs/32755540579",
+  "run_id": 32756279073,
+  "run_url": "https://github.com/acciento89-bot/99-9/actions/runs/32756279073",
   "conclusion": "success",
-  "head_sha": "cc21ab11a2aef6bc283fb675cd624657cf17cc2b",
+  "head_sha": "ca8b2ef6faca19892e67b6bd60b971641582a41e",
   "event": "push",
-  "app": "kaltecalc",
+  "app": "lueftungscalc",
   "marketing_version": "1.0",
   "build_number": "1",
   "source_ref": "main"
