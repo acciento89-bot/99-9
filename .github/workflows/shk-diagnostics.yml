@@ -1,0 +1,181 @@
+name: SHK Release Diagnostics
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/shk-diagnostics.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SHK_REPO: acciento89-bot/SHK
+  APPLE_TEAM_ID: TKG684N5GL
+
+jobs:
+  diagnose:
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - name: Checkout bridge
+        uses: actions/checkout@v5
+        with:
+          path: bridge
+
+      - name: Resolve diagnostic request
+        shell: bash
+        run: |
+          set -euo pipefail
+          REQUEST="bridge/.github/shk-diagnostics.json"
+          if [[ -s "$REQUEST" ]]; then
+            APP_KEY=$(jq -er '.app' "$REQUEST")
+            SOURCE_REF=$(jq -er '.source_ref' "$REQUEST")
+            RELEASE_VERSION=$(jq -er '.marketing_version' "$REQUEST")
+            RELEASE_BUILD=$(jq -er '.build_number' "$REQUEST")
+          else
+            APP_KEY=kaltecalc
+            SOURCE_REF=main
+            RELEASE_VERSION=1.0
+            RELEASE_BUILD=1
+          fi
+          echo "APP_KEY=$APP_KEY" >> "$GITHUB_ENV"
+          echo "SOURCE_REF=$SOURCE_REF" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=$RELEASE_VERSION" >> "$GITHUB_ENV"
+          echo "RELEASE_BUILD=$RELEASE_BUILD" >> "$GITHUB_ENV"
+
+      - name: Checkout SHK
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.SHK_REPO }}
+          ref: ${{ env.SOURCE_REF }}
+          path: shk
+
+      - name: Load app identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd shk
+          ENTRY=$(jq -cer --arg key "$APP_KEY" '.apps[] | select(.key == $key)' release/apps.json)
+          SCHEME=$(jq -r '.scheme' <<<"$ENTRY")
+          DISPLAY_NAME=$(jq -r '.display_name' <<<"$ENTRY")
+          BUNDLE_ID=$(jq -r '.bundle_id' <<<"$ENTRY")
+          SOURCE_DIR=$(jq -r '.source_dir' <<<"$ENTRY")
+          PROJECT=$(jq -r '.project' release/apps.json)
+          echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
+          echo "DISPLAY_NAME=$DISPLAY_NAME" >> "$GITHUB_ENV"
+          echo "BUNDLE_ID=$BUNDLE_ID" >> "$GITHUB_ENV"
+          echo "SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
+          echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
+          grep -Fq "PRODUCT_BUNDLE_IDENTIFIER: $BUNDLE_ID" project.yml
+          grep -Fq "PRODUCT_NAME: $DISPLAY_NAME" project.yml
+          printf 'Diagnostic identity: %s / %s / %s\n' "$DISPLAY_NAME" "$SCHEME" "$BUNDLE_ID"
+
+      - name: Run SHK core tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd shk
+          swift test
+
+      - name: Generate and verify AppIcon
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd shk
+          python3 scripts/generate_app_icon.py --app "$APP_KEY" --source-dir "$SOURCE_DIR"
+          ICON="$SOURCE_DIR/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png"
+          test -s "$ICON"
+          file "$ICON" | grep -q 'PNG image data, 1024 x 1024'
+          ALPHA=$(sips -g hasAlpha "$ICON" | tail -1 | awk '{print $2}')
+          test "$ALPHA" = "no"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project and unsigned archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd shk
+          xcodegen generate
+          xcodebuild -project "$PROJECT" -scheme "$SCHEME" -list
+          ARCHIVE="$RUNNER_TEMP/${SCHEME}-diagnostic.xcarchive"
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$ARCHIVE" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
+            MARKETING_VERSION="$RELEASE_VERSION" \
+            CURRENT_PROJECT_VERSION="$RELEASE_BUILD" \
+            ASSETCATALOG_COMPILER_APPICON_NAME=AppIcon \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            clean archive
+          APP=$(find "$ARCHIVE/Products/Applications" -maxdepth 1 -type d -name '*.app' -print -quit)
+          test -d "$APP"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist" | grep -Fx "$BUNDLE_ID"
+          test -s "$APP/Assets.car"
+          echo "Unsigned archive and AppIcon catalog verified."
+
+      - name: Install App Store Connect API key
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$ASC_ISSUER_ID"
+          test -n "$ASC_KEY_ID"
+          test -n "$ASC_PRIVATE_KEY_B64"
+          KEY_DIR="$HOME/.appstoreconnect/private_keys"
+          mkdir -p "$KEY_DIR"
+          KEY_PATH="$KEY_DIR/AuthKey_${ASC_KEY_ID}.p8"
+          printf '%s' "$ASC_PRIVATE_KEY_B64" | tr -d '\r\n ' | base64 --decode > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          echo "ASC_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Check App Store record and requested build
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          JWT=$(ruby <<'RUBY'
+          require 'openssl'; require 'base64'; require 'json'
+          def b(v); Base64.urlsafe_encode64(v,padding:false); end
+          key=OpenSSL::PKey.read(File.read(ENV.fetch('ASC_KEY_PATH'))); now=Time.now.to_i
+          h=b(JSON.generate({alg:'ES256',kid:ENV.fetch('ASC_KEY_ID'),typ:'JWT'})); p=b(JSON.generate({iss:ENV.fetch('ASC_ISSUER_ID'),iat:now,exp:now+900,aud:'appstoreconnect-v1'})); s="#{h}.#{p}"
+          seq=OpenSSL::ASN1.decode(key.sign(OpenSSL::Digest::SHA256.new,s)); raw=seq.value.map{|i|[i.value.to_i.to_s(16).rjust(64,'0')].pack('H*')}.join
+          puts "#{s}.#{b(raw)}"
+          RUBY
+          )
+          APPS=$(curl --fail-with-body -sS -G -H "Authorization: Bearer $JWT" --data-urlencode "filter[bundleId]=$BUNDLE_ID" --data-urlencode 'limit=10' 'https://api.appstoreconnect.apple.com/v1/apps')
+          APP_ID=$(jq -r '.data[0].id // empty' <<<"$APPS")
+          test -n "$APP_ID"
+          ASC_NAME=$(jq -r '.data[0].attributes.name // empty' <<<"$APPS")
+          echo "App Store app found: $ASC_NAME / $APP_ID / $BUNDLE_ID"
+          BUILDS=$(curl --fail-with-body -sS -G -H "Authorization: Bearer $JWT" \
+            --data-urlencode "filter[app]=$APP_ID" \
+            --data-urlencode "filter[version]=$RELEASE_BUILD" \
+            --data-urlencode 'sort=-uploadedDate' \
+            --data-urlencode 'limit=5' \
+            'https://api.appstoreconnect.apple.com/v1/builds')
+          COUNT=$(jq '.data | length' <<<"$BUILDS")
+          echo "Requested build records found: $COUNT"
+          if [[ "$COUNT" -gt 0 ]]; then
+            jq -r '.data[] | "BUILD_RECORD id=\(.id) version=\(.attributes.version) state=\(.attributes.processingState) uploaded=\(.attributes.uploadedDate)"' <<<"$BUILDS"
+          else
+            echo "BUILD_RECORD not visible for requested build yet"
+          fi
+
+      - name: Remove App Store Connect key
+        if: always()
+        run: rm -f "$HOME/.appstoreconnect/private_keys"/AuthKey_*.p8
