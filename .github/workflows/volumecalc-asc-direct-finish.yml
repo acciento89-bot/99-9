@@ -12,7 +12,7 @@ permissions:
 jobs:
   finish:
     runs-on: macos-26
-    timeout-minutes: 10
+    timeout-minutes: 15
     env:
       APP_ID: '6804672773'
       APP_INFO_ID: 'b3ce09f2-a3d4-4681-a5e9-315326a8dc6f'
@@ -37,7 +37,7 @@ jobs:
           chmod 600 "$KEY_PATH"
           echo "ASC_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
 
-      - name: Create 4.99 EUR price and audit
+      - name: Finalize price compliance age rating and review data
         env:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
@@ -58,62 +58,169 @@ jobs:
           puts "#{s}.#{b(raw)}"
           RUBY
           }
+          TOKEN=$(jwt)
           raw_get() {
             local path="$1" out="$2"
-            curl --no-fail --no-fail-with-body --globoff -sS -o "$out" -w '%{http_code}' -H "Authorization: Bearer $(jwt)" "$API$path" || printf 'CURLFAIL'
+            curl --no-fail --no-fail-with-body --globoff -sS -o "$out" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$API$path" || printf 'CURLFAIL'
           }
           raw_post() {
             local path="$1" body="$2" out="$3"
-            curl --no-fail --no-fail-with-body --globoff -sS -o "$out" -w '%{http_code}' -X POST -H "Authorization: Bearer $(jwt)" -H 'Content-Type: application/json' -d "$body" "$API$path" || printf 'CURLFAIL'
+            curl --no-fail --no-fail-with-body --globoff -sS -o "$out" -w '%{http_code}' -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "$body" "$API$path" || printf 'CURLFAIL'
+          }
+          raw_patch() {
+            local path="$1" body="$2" out="$3"
+            curl --no-fail --no-fail-with-body --globoff -sS -o "$out" -w '%{http_code}' -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "$body" "$API$path" || printf 'CURLFAIL'
           }
 
-          echo '=== PRICE ==='
+          echo '=== PRICE 4.99 EUR / DEU ==='
           SFILE="$RUNNER_TEMP/schedule.json"
           SCODE=$(raw_get "/v1/apps/$APP_ID/appPriceSchedule" "$SFILE")
-          echo "Existing schedule HTTP=$SCODE"
           if [ "$SCODE" = '404' ]; then
             BODY=$(jq -nc --arg app "$APP_ID" --arg pp "$PRICE_POINT_ID" '{data:{type:"appPriceSchedules",relationships:{app:{data:{type:"apps",id:$app}},baseTerritory:{data:{type:"territories",id:"DEU"}},manualPrices:{data:[{type:"appPrices",id:"manualPrice-0"}]}}},included:[{type:"appPrices",id:"manualPrice-0",relationships:{appPricePoint:{data:{type:"appPricePoints",id:$pp}}}}]}')
             PFILE="$RUNNER_TEMP/price-create.json"
             PCODE=$(raw_post '/v1/appPriceSchedules' "$BODY" "$PFILE")
-            echo "Create schedule HTTP=$PCODE"
-            cat "$PFILE" | jq '.' || cat "$PFILE"
+            echo "Create price schedule HTTP=$PCODE"
             test "$PCODE" = '201'
-            echo 'PRICE_RESULT=4.99 EUR CREATED'
-          elif [ "$SCODE" = '200' ]; then
-            echo 'Price schedule already exists:'
-            jq '{id:.data.id}' "$SFILE"
-            echo 'PRICE_RESULT=SCHEDULE_ALREADY_EXISTS'
-          else
+          elif [ "$SCODE" != '200' ]; then
+            echo "Unexpected app price schedule HTTP=$SCODE"
             cat "$SFILE" || true
             exit 11
           fi
+          MFILE="$RUNNER_TEMP/manual-prices.json"
+          MCODE=$(raw_get "/v1/appPriceSchedules/$APP_ID/manualPrices?include=appPricePoint,territory&limit=100" "$MFILE")
+          echo "Manual price verification HTTP=$MCODE"
+          test "$MCODE" = '200'
+          jq '[.data[] | {id,startDate:.attributes.startDate,endDate:.attributes.endDate,pricePoint:.relationships.appPricePoint.data.id,territory:.relationships.territory.data.id}]' "$MFILE"
+          jq -e --arg pp "$PRICE_POINT_ID" '.data[] | select(.relationships.appPricePoint.data.id==$pp and .attributes.endDate==null)' "$MFILE" >/dev/null
+          echo 'PRICE_RESULT=VERIFIED_4_99_EUR_DEU'
 
-          echo '=== VERIFY BUILD RELATION ==='
+          echo '=== BUILD 2 ==='
           VFILE="$RUNNER_TEMP/version.json"
           VCODE=$(raw_get "/v1/appStoreVersions/$VERSION_ID?include=build" "$VFILE")
           test "$VCODE" = '200'
-          jq '{version:.data.attributes.versionString,state:.data.attributes.appStoreState,releaseType:.data.attributes.releaseType,build:(.included[]? | select(.type=="builds") | {id,version:.attributes.version,processingState:.attributes.processingState})}' "$VFILE"
-          jq -e --arg bid "$BUILD_ID" '.included[]? | select(.type=="builds" and .id==$bid)' "$VFILE" >/dev/null
-          echo 'BUILD_RESULT=BUILD_2_ATTACHED'
+          jq -e --arg bid "$BUILD_ID" '.included[]? | select(.type=="builds" and .id==$bid and .attributes.version=="2" and .attributes.processingState=="VALID")' "$VFILE" >/dev/null
+          echo 'BUILD_RESULT=BUILD_2_ATTACHED_VALID'
+
+          echo '=== EXPORT COMPLIANCE ==='
+          EBODY=$(jq -nc --arg id "$BUILD_ID" '{data:{type:"builds",id:$id,attributes:{usesNonExemptEncryption:false}}}')
+          EFILE="$RUNNER_TEMP/build-patch.json"
+          ECODE=$(raw_patch "/v1/builds/$BUILD_ID" "$EBODY" "$EFILE")
+          echo "Build compliance PATCH HTTP=$ECODE"
+          test "$ECODE" = '200'
+          BFILE="$RUNNER_TEMP/build.json"
+          BCODE=$(raw_get "/v1/builds/$BUILD_ID" "$BFILE")
+          test "$BCODE" = '200'
+          test "$(jq -r '.data.attributes.usesNonExemptEncryption' "$BFILE")" = false
+          echo 'EXPORT_RESULT=NO_NONEXEMPT_ENCRYPTION'
 
           echo '=== AGE RATING ==='
-          AFILE="$RUNNER_TEMP/age.json"
+          AFILE="$RUNNER_TEMP/age-before.json"
           ACODE=$(raw_get "/v1/appInfos/$APP_INFO_ID/ageRatingDeclaration" "$AFILE")
-          echo "Age rating HTTP=$ACODE"
           test "$ACODE" = '200'
-          jq '{id:.data.id,attributes:.data.attributes}' "$AFILE"
+          AGE_ID=$(jq -r '.data.id' "$AFILE")
+          AATTR=$(jq -nc '{advertising:false,alcoholTobaccoOrDrugUseOrReferences:"NONE",contests:"NONE",gambling:false,gamblingSimulated:"NONE",gunsOrOtherWeapons:"NONE",healthOrWellnessTopics:false,lootBox:false,medicalOrTreatmentInformation:"NONE",messagingAndChat:false,parentalControls:false,profanityOrCrudeHumor:"NONE",ageAssurance:false,sexualContentGraphicAndNudity:"NONE",sexualContentOrNudity:"NONE",socialMedia:false,socialMediaAgeRestricted:false,horrorOrFearThemes:"NONE",matureOrSuggestiveThemes:"NONE",unrestrictedWebAccess:false,userGeneratedContent:false,violenceCartoonOrFantasy:"NONE",violenceRealisticProlongedGraphicOrSadistic:"NONE",violenceRealistic:"NONE"}')
+          ABODY=$(jq -nc --arg id "$AGE_ID" --argjson a "$AATTR" '{data:{type:"ageRatingDeclarations",id:$id,attributes:$a}}')
+          APFILE="$RUNNER_TEMP/age-patch.json"
+          APCODE=$(raw_patch "/v1/ageRatingDeclarations/$AGE_ID" "$ABODY" "$APFILE")
+          echo "Age rating PATCH HTTP=$APCODE"
+          if [ "$APCODE" != '200' ]; then cat "$APFILE" | jq '.' || cat "$APFILE"; exit 21; fi
+          ACHECK="$RUNNER_TEMP/age-after.json"
+          ACCODE=$(raw_get "/v1/appInfos/$APP_INFO_ID/ageRatingDeclaration" "$ACHECK")
+          test "$ACCODE" = '200'
+          test "$(jq -r '.data.attributes.advertising' "$ACHECK")" = false
+          test "$(jq -r '.data.attributes.gambling' "$ACHECK")" = false
+          test "$(jq -r '.data.attributes.unrestrictedWebAccess' "$ACHECK")" = false
+          test "$(jq -r '.data.attributes.violenceRealistic' "$ACHECK")" = NONE
+          IFILE="$RUNNER_TEMP/app-info.json"
+          ICODE=$(raw_get "/v1/appInfos/$APP_INFO_ID" "$IFILE")
+          test "$ICODE" = '200'
+          echo "AGE_RESULT=$(jq -r '.data.attributes.appStoreAgeRating // "CALCULATING"' "$IFILE")"
 
-          echo '=== REVIEW DETAIL ==='
-          RFILE="$RUNNER_TEMP/review.json"
+          echo '=== APP REVIEW CONTACT ==='
+          RFILE="$RUNNER_TEMP/current-review.json"
           RCODE=$(raw_get "/v1/appStoreVersions/$VERSION_ID/appStoreReviewDetail" "$RFILE")
-          echo "Review detail HTTP=$RCODE"
-          if [ "$RCODE" = '200' ]; then jq '{id:.data.id,attributes:.data.attributes}' "$RFILE"; else cat "$RFILE" | jq '.' || true; fi
+          RID=$(jq -r '.data.id // empty' "$RFILE" 2>/dev/null || true)
+          CONTACT=''
+          if [ -n "$RID" ]; then
+            F=$(jq -r '.data.attributes.contactFirstName // empty' "$RFILE"); L=$(jq -r '.data.attributes.contactLastName // empty' "$RFILE"); P=$(jq -r '.data.attributes.contactPhone // empty' "$RFILE"); E=$(jq -r '.data.attributes.contactEmail // empty' "$RFILE")
+            if [ -n "$F" ] && [ -n "$L" ] && [ -n "$P" ] && [ -n "$E" ]; then CONTACT=$(jq -nc --arg f "$F" --arg l "$L" --arg p "$P" --arg e "$E" '{first:$f,last:$l,phone:$p,email:$e}'); fi
+          fi
+          if [ -z "$CONTACT" ]; then
+            APPS_FILE="$RUNNER_TEMP/apps.json"
+            APPS_CODE=$(raw_get '/v1/apps?limit=200' "$APPS_FILE")
+            test "$APPS_CODE" = '200'
+            while read -r aid; do
+              [ -z "$aid" ] && continue
+              [ "$aid" = "$APP_ID" ] && continue
+              VF="$RUNNER_TEMP/versions-$aid.json"
+              VC=$(raw_get "/v1/apps/$aid/appStoreVersions?filter%5Bplatform%5D=IOS&limit=50" "$VF")
+              [ "$VC" = '200' ] || continue
+              while read -r vid; do
+                [ -z "$vid" ] && continue
+                RF="$RUNNER_TEMP/review-$vid.json"
+                RC=$(raw_get "/v1/appStoreVersions/$vid/appStoreReviewDetail" "$RF")
+                [ "$RC" = '200' ] || continue
+                F=$(jq -r '.data.attributes.contactFirstName // empty' "$RF" 2>/dev/null || true)
+                L=$(jq -r '.data.attributes.contactLastName // empty' "$RF" 2>/dev/null || true)
+                P=$(jq -r '.data.attributes.contactPhone // empty' "$RF" 2>/dev/null || true)
+                E=$(jq -r '.data.attributes.contactEmail // empty' "$RF" 2>/dev/null || true)
+                if [ -n "$F" ] && [ -n "$L" ] && [ -n "$P" ] && [ -n "$E" ]; then
+                  CONTACT=$(jq -nc --arg f "$F" --arg l "$L" --arg p "$P" --arg e "$E" '{first:$f,last:$l,phone:$p,email:$e}')
+                  break 2
+                fi
+              done < <(jq -r '.data[]?.id' "$VF")
+            done < <(jq -r '.data[]?.id' "$APPS_FILE")
+          fi
+          test -n "$CONTACT"
+          F=$(jq -r '.first' <<<"$CONTACT"); L=$(jq -r '.last' <<<"$CONTACT"); P=$(jq -r '.phone' <<<"$CONTACT"); E=$(jq -r '.email' <<<"$CONTACT")
+          NOTES=$(cat <<'EOF'
+VolumeCalc requires no sign-in, account or network connection. All core calculations work offline and projects are stored locally on the device.
+
+Suggested review path:
+1. Tap the + button or "Erstes Bauteil hinzufügen".
+2. Add a pipe using a preset or a custom inner diameter and length.
+3. Add floor, wall or ceiling heating, a panel radiator, or a steel/cast-iron sectional radiator. Manufacturer water content can always be entered directly.
+4. Add a buffer/storage tank, heat generator, hydraulic separator, distributor/collector, heat exchanger or any known manual water volume.
+5. The main screen shows calculated system volume and a separately configurable planning reserve.
+6. Results can be shared through the standard iOS share sheet.
+
+There are no in-app purchases, subscriptions, ads, external payment methods, user accounts or server-backed user content. VolumeCalc is sold as a one-time paid App Store download.
+EOF
+          )
+          RATTR=$(jq -nc --arg f "$F" --arg l "$L" --arg p "$P" --arg e "$E" --arg n "$NOTES" '{contactFirstName:$f,contactLastName:$l,contactPhone:$p,contactEmail:$e,demoAccountRequired:false,notes:$n}')
+          if [ -n "$RID" ]; then
+            RBODY=$(jq -nc --arg id "$RID" --argjson a "$RATTR" '{data:{type:"appStoreReviewDetails",id:$id,attributes:$a}}')
+            RPFILE="$RUNNER_TEMP/review-patch.json"
+            RPCODE=$(raw_patch "/v1/appStoreReviewDetails/$RID" "$RBODY" "$RPFILE")
+            echo "Review PATCH HTTP=$RPCODE"
+            test "$RPCODE" = '200'
+          else
+            RBODY=$(jq -nc --arg vid "$VERSION_ID" --argjson a "$RATTR" '{data:{type:"appStoreReviewDetails",attributes:$a,relationships:{appStoreVersion:{data:{type:"appStoreVersions",id:$vid}}}}}')
+            RPFILE="$RUNNER_TEMP/review-create.json"
+            RPCODE=$(raw_post '/v1/appStoreReviewDetails' "$RBODY" "$RPFILE")
+            echo "Review POST HTTP=$RPCODE"
+            if [ "$RPCODE" != '201' ]; then cat "$RPFILE" | jq '.' || cat "$RPFILE"; exit 31; fi
+          fi
+          RCHECK="$RUNNER_TEMP/review-check.json"
+          RCCODE=$(raw_get "/v1/appStoreVersions/$VERSION_ID/appStoreReviewDetail" "$RCHECK")
+          test "$RCCODE" = '200'
+          test -n "$(jq -r '.data.attributes.contactPhone // empty' "$RCHECK")"
+          test "$(jq -r '.data.attributes.demoAccountRequired' "$RCHECK")" = false
+          test -n "$(jq -r '.data.attributes.notes // empty' "$RCHECK")"
+          echo 'REVIEW_RESULT=CONTACT_AND_NOTES_COMPLETE'
 
           echo '=== SCREENSHOT SETS ==='
           SSFILE="$RUNNER_TEMP/screenshots.json"
           SSCODE=$(raw_get "/v1/appStoreVersionLocalizations/$LOC_ID/appScreenshotSets?limit=50" "$SSFILE")
           test "$SSCODE" = '200'
           jq '[.data[] | {id,displayType:.attributes.screenshotDisplayType}]' "$SSFILE"
+          echo "SCREENSHOT_SET_COUNT=$(jq '.data | length' "$SSFILE")"
+
+          echo '=== FINAL VERSION STATE ==='
+          VFINAL="$RUNNER_TEMP/version-final.json"
+          VFCODE=$(raw_get "/v1/appStoreVersions/$VERSION_ID?include=build" "$VFINAL")
+          test "$VFCODE" = '200'
+          jq '{version:.data.attributes.versionString,state:.data.attributes.appStoreState,releaseType:.data.attributes.releaseType,build:(.included[]? | select(.type=="builds") | {id,version:.attributes.version,processingState:.attributes.processingState})}' "$VFINAL"
 
       - name: Remove ASC key
         if: always()
