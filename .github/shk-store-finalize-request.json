@@ -1,0 +1,15 @@
+{
+  "repository": "acciento89-bot/SHK",
+  "version": "1.0",
+  "build": "2",
+  "apps": [
+    "kaltecalc",
+    "lueftungscalc",
+    "heizkoerpercalc",
+    "rohrcalc",
+    "anlagencheck"
+  ],
+  "submit_for_review": true,
+  "release_after_approval": true,
+  "requested_at": "2026-08-24T21:07:00+02:00"
+}
