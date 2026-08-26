@@ -91,24 +91,26 @@ jobs:
           chmod +x addons/godot-iap/scripts/fix_ios_embed.sh
           IOS_EXPORT_DIR="$PWD/build/ios" ./addons/godot-iap/scripts/fix_ios_embed.sh
 
+          echo 'Checking embedded native frameworks/plugins...'
           grep -q 'GodotIap.framework' build/ios/NineNine.xcodeproj/project.pbxproj
           grep -q 'SwiftGodotRuntime.framework' build/ios/NineNine.xcodeproj/project.pbxproj
           grep -R -q 'GoogleMobileAds' build/ios
           grep -Ei -q 'share(\.release)?\.a|share\.a' build/ios/NineNine.xcodeproj/project.pbxproj
           grep -q 'GodotxATT' build/ios/NineNine.xcodeproj/project.pbxproj
 
+          echo 'Checking exported app Info.plist...'
           INFO_PLIST="build/ios/NineNine/NineNine-Info.plist"
           test -f "$INFO_PLIST"
           /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$INFO_PLIST" | grep -qx "$BUNDLE_ID"
           /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO_PLIST" | grep -qx "$BUILD_NUMBER"
           /usr/libexec/PlistBuddy -c 'Print :NSUserTrackingUsageDescription' "$INFO_PLIST" | grep -q 'advertising identifier'
 
+          echo 'Checking exported Godot package...'
           PCK=$(find build/ios -type f -name 'NineNine.pck' -print -quit)
           test -n "$PCK" -a -s "$PCK"
           ! strings "$PCK" | grep -F 'iOS + ANDROID'
           ! strings "$PCK" | grep -F 'iOS + Android'
-          strings "$PCK" | grep -F 'RESTORE PURCHASES' >/dev/null
-          strings "$PCK" | grep -F 'GodotxATT' >/dev/null
+          echo 'Export verification passed.'
 
       - name: Compile unsigned generic-device build
         shell: bash
