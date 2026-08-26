@@ -1,7 +1,7 @@
 {
   "repository": "acciento89-bot/SHK",
   "version": "1.0",
-  "replace_with_build": "3",
+  "replace_with_build": "4",
   "apps": [
     "kaltecalc",
     "lueftungscalc",
@@ -11,5 +11,5 @@
   ],
   "resubmit": true,
   "release_after_approval": true,
-  "requested_at": "2026-08-24T22:43:00+02:00"
+  "requested_at": "2026-08-26T18:29:00+02:00"
 }
