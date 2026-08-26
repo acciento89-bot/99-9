@@ -1,4 +1,4 @@
-name: SHK Build 3 Review Replace
+name: SHK Build 4 Review Replace
 
 on:
   push:
@@ -20,10 +20,10 @@ jobs:
         with:
           path: bridge
 
-      - name: Replace submitted SHK builds with Build 3
+      - name: Replace rejected SHK builds with Build 4 and resubmit
         env:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
         shell: bash
-        run: bash bridge/.github/scripts/shk_build3_review_replace.sh
+        run: bash bridge/.github/scripts/shk_build4_review_replace.sh
