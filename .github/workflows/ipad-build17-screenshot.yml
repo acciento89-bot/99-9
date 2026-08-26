@@ -31,14 +31,12 @@ jobs:
           bash scripts/ci_install_admob.sh ios
           bash scripts/ci_install_share_ios.sh
           bash scripts/ci_install_att_ios.sh
-
           curl -L --fail --retry 3 -o "$RUNNER_TEMP/godot.zip" "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_macos.universal.zip"
           mkdir -p "$RUNNER_TEMP/godot"
           unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP/godot"
           GODOT="$RUNNER_TEMP/godot/Godot.app/Contents/MacOS/Godot"
           test -x "$GODOT"
           echo "GODOT=$GODOT" >> "$GITHUB_ENV"
-
           T="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"
           mkdir -p "$T" "$RUNNER_TEMP/templates"
           curl -L --fail --retry 3 -o "$RUNNER_TEMP/templates.tpz" "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_export_templates.tpz"
@@ -59,10 +57,8 @@ jobs:
           mkdir -p build/ipad
           "$GODOT" --headless --path . --export-release "iOS Playtest" build/ipad/NineNine.zip
           test -d build/ipad/NineNine.xcodeproj
-
           chmod +x addons/godot-iap/scripts/fix_ios_embed.sh
           IOS_EXPORT_DIR="$PWD/build/ipad" ./addons/godot-iap/scripts/fix_ios_embed.sh
-
           echo "XCODE_PROJECT=$PWD/build/ipad/NineNine.xcodeproj" >> "$GITHUB_ENV"
           echo "PBXPROJ=$PWD/build/ipad/NineNine.xcodeproj/project.pbxproj" >> "$GITHUB_ENV"
 
@@ -129,6 +125,7 @@ jobs:
           RUNTIME=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; d=json.load(sys.stdin); xs=[x["identifier"] for x in d["runtimes"] if x.get("platform")=="iOS" and x.get("isAvailable")]; print(xs[-1] if xs else "")')
           test -n "$RUNTIME"
           UDID=$(xcrun simctl create 'NineNine Store iPad' "$DEVICE_TYPE" "$RUNTIME")
+          export UDID
           echo "UDID=$UDID" >> "$GITHUB_ENV"
           xcrun simctl boot "$UDID" >/dev/null 2>&1 || true
           BOOTED=0
@@ -164,7 +161,6 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             build
-
           APP=$(find "$DD/Build/Products" -maxdepth 3 -type d -name 'NineNine.app' -print -quit)
           test -d "$APP"
           xcrun simctl install "$UDID" "$APP"
