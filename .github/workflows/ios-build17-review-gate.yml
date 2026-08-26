@@ -98,12 +98,20 @@ jobs:
           grep -Ei -q 'share(\.release)?\.a|share\.a' build/ios/NineNine.xcodeproj/project.pbxproj
           grep -q 'GodotxATT' build/ios/NineNine.xcodeproj/project.pbxproj
 
-          echo 'Checking exported app Info.plist...'
+          echo 'Checking exported app identity and ATT description...'
           INFO_PLIST="build/ios/NineNine/NineNine-Info.plist"
           test -f "$INFO_PLIST"
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$INFO_PLIST" | grep -qx "$BUNDLE_ID"
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO_PLIST" | grep -qx "$BUILD_NUMBER"
-          /usr/libexec/PlistBuddy -c 'Print :NSUserTrackingUsageDescription' "$INFO_PLIST" | grep -q 'advertising identifier'
+          BUNDLE_VALUE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$INFO_PLIST")
+          BUILD_VALUE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO_PLIST")
+          TRACK_VALUE=$(/usr/libexec/PlistBuddy -c 'Print :NSUserTrackingUsageDescription' "$INFO_PLIST")
+          echo "CFBundleIdentifier=$BUNDLE_VALUE"
+          echo "CFBundleVersion=$BUILD_VALUE"
+          echo "NSUserTrackingUsageDescription=$TRACK_VALUE"
+          [[ "$BUNDLE_VALUE" == "$BUNDLE_ID" || "$BUNDLE_VALUE" == '$(PRODUCT_BUNDLE_IDENTIFIER)' ]]
+          [[ "$BUILD_VALUE" == "$BUILD_NUMBER" || "$BUILD_VALUE" == '$(CURRENT_PROJECT_VERSION)' ]]
+          grep -Fq "$BUNDLE_ID" build/ios/NineNine.xcodeproj/project.pbxproj
+          grep -Eq 'CURRENT_PROJECT_VERSION = 17;' build/ios/NineNine.xcodeproj/project.pbxproj
+          grep -q 'advertising identifier' <<<"$TRACK_VALUE"
 
           echo 'Checking exported Godot package...'
           PCK=$(find build/ios -type f -name 'NineNine.pck' -print -quit)
