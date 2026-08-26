@@ -1,0 +1,68 @@
+name: App Store Screenshot Set Probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/store-screenshot-probe-request.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Probe screenshot sets
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEY="$RUNNER_TEMP/AuthKey_${ASC_KEY_ID}.p8"
+          printf '%s' "$ASC_PRIVATE_KEY_B64" | tr -d '\r\n ' | base64 --decode > "$KEY"
+          chmod 600 "$KEY"
+          export ASC_KEY_PATH="$KEY"
+          TOKEN=$(ruby <<'RUBY'
+          require 'openssl'; require 'base64'; require 'json'
+          def b(v); Base64.urlsafe_encode64(v,padding:false); end
+          key=OpenSSL::PKey.read(File.read(ENV.fetch('ASC_KEY_PATH'))); now=Time.now.to_i
+          h=b(JSON.generate({alg:'ES256',kid:ENV.fetch('ASC_KEY_ID'),typ:'JWT'}))
+          p=b(JSON.generate({iss:ENV.fetch('ASC_ISSUER_ID'),iat:now,exp:now+1200,aud:'appstoreconnect-v1'}))
+          s="#{h}.#{p}"
+          seq=OpenSSL::ASN1.decode(key.sign(OpenSSL::Digest::SHA256.new,s))
+          raw=seq.value.map{|i|[i.value.to_i.to_s(16).rjust(64,'0')].pack('H*')}.join
+          puts "#{s}.#{b(raw)}"
+          RUBY
+          )
+          api='https://api.appstoreconnect.apple.com'
+          get(){ curl --globoff -fsS -H "Authorization: Bearer $TOKEN" "$api$1"; }
+          declare -a bundles=(
+            'de.kamilunav.kaltecalc'
+            'de.kamilunavo.luftungscalc'
+            'de.kamilunavo.heizkorpercalc'
+            'de.kamilunavo.rohrcalc'
+            'de.kamilunavo.servicecheck'
+            'de.kamilunavo.volumecalc'
+          )
+          for bundle in "${bundles[@]}"; do
+            echo "=== $bundle ==="
+            app=$(get "/v1/apps?filter%5BbundleId%5D=$bundle&limit=5")
+            aid=$(jq -r '.data[0].id // empty' <<<"$app")
+            [[ -n "$aid" ]] || { echo 'APP_NOT_FOUND'; continue; }
+            vers=$(get "/v1/apps/$aid/appStoreVersions?filter%5Bplatform%5D=IOS&filter%5BversionString%5D=1.0&limit=20")
+            vid=$(jq -r '.data[0].id // empty' <<<"$vers")
+            [[ -n "$vid" ]] || { echo 'VERSION_NOT_FOUND'; continue; }
+            locs=$(get "/v1/appStoreVersions/$vid/appStoreVersionLocalizations?limit=50")
+            while IFS=$'\t' read -r lid locale; do
+              [[ -n "$lid" ]] || continue
+              echo "locale=$locale"
+              sets=$(get "/v1/appStoreVersionLocalizations/$lid/appScreenshotSets?limit=100")
+              jq -r '.data[]? | "  " + .attributes.screenshotDisplayType + "\t" + .id' <<<"$sets"
+            done < <(jq -r '.data[]? | [.id,.attributes.locale] | @tsv' <<<"$locs")
+          done
