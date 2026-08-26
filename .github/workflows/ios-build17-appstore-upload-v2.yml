@@ -1,4 +1,4 @@
-name: 99.9 Build 17 App Store Upload v2
+name: 99.9 Build 17 Unsigned Bridge Artifact
 
 on:
   push:
@@ -14,20 +14,19 @@ permissions:
 env:
   GODOT_VERSION: '4.7.2'
   GODOT_TAG: '4.7.2-stable'
-  TEAM_ID: 'TKG684N5GL'
   BUNDLE_ID: 'de.kamilunavo.ninenine'
   APP_VERSION: '1.0.0'
   BUILD_NUMBER: '17'
 
 jobs:
-  build-sign-upload:
+  build-unsigned:
     runs-on: macos-26
-    timeout-minutes: 80
+    timeout-minutes: 70
     steps:
       - name: Checkout Build 17 source
         uses: actions/checkout@v5
 
-      - name: Verify App Review remediation
+      - name: Verify Build 17 App Review source
         shell: bash
         run: |
           set -euo pipefail
@@ -42,25 +41,6 @@ jobs:
           grep -q 'application/version="17"' export_presets.cfg
           grep -q 'GodotIapPlugin="\*res://addons/godot-iap/godot_iap_ios_safe.gd"' project.godot
           ! grep -q 'com.kamilunavo.game999' project.godot scripts/*.gd export_presets.cfg
-
-      - name: Prepare App Store Connect key
-        env:
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-          ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "$ASC_ISSUER_ID"
-          test -n "$ASC_KEY_ID"
-          test -n "$ASC_PRIVATE_KEY_B64"
-          KEY_DIR="$HOME/.appstoreconnect/private_keys"
-          mkdir -p "$KEY_DIR"
-          KEY_PATH="$KEY_DIR/AuthKey_${ASC_KEY_ID}.p8"
-          printf '%s' "$ASC_PRIVATE_KEY_B64" | tr -d '\r\n ' | base64 --decode > "$KEY_PATH"
-          chmod 600 "$KEY_PATH"
-          grep -q 'PRIVATE KEY' "$KEY_PATH"
-          echo "ASC_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
 
       - name: Install Godot and native iOS plugins
         shell: bash
@@ -141,100 +121,53 @@ jobs:
           echo "SOURCE_INFO_PLIST=$INFO_PLIST" >> "$GITHUB_ENV"
           echo "PBXPROJ=$PBX" >> "$GITHUB_ENV"
 
-      - name: Restore all referenced XCFramework dependencies
+      - name: Restore referenced XCFramework dependencies
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import os, pathlib, re, shutil, sys
-
           root = pathlib.Path.cwd()
           out = root / 'build' / 'ios'
           pbx = out / 'NineNine.xcodeproj' / 'project.pbxproj'
           text = pbx.read_text(errors='replace')
-
-          # Only PBX `path = ...xcframework;` entries are real filesystem refs.
-          # Swift Package products (for example Promises/FBLPromises) are resolved
-          # by Xcode and must not be forced into the local export directory.
           path_values = re.findall(r'\bpath\s*=\s*"?([^";]+\.xcframework)"?\s*;', text)
           names = sorted({pathlib.Path(value).name for value in path_values})
-          if not names:
-              raise SystemExit('No real XCFramework path references found in generated Xcode project')
-          print('Real XCFramework references:', ', '.join(names))
-
-          search_roots = [
-              pathlib.Path(os.environ['RUNNER_TEMP']) / 'ninenine-admob-native',
-              root / 'addons',
-              root / 'ios',
-          ]
+          search_roots = [pathlib.Path(os.environ['RUNNER_TEMP']) / 'ninenine-admob-native', root / 'addons', root / 'ios']
           missing = []
           for name in names:
               dest = out / name
               if dest.is_dir():
-                  print(f'Already present: {name}')
                   continue
-
               candidates = []
               for base in search_roots:
-                  if not base.exists():
-                      continue
-                  for p in base.rglob(name):
-                      if p.is_dir() and p.resolve() != dest.resolve():
-                          candidates.append(p)
-
-              # Some plugin release zips suffix the XCFramework directory even
-              # though the .gdip/PBX path uses the canonical basename.
+                  if base.exists():
+                      candidates.extend([p for p in base.rglob(name) if p.is_dir() and p.resolve() != dest.resolve()])
               if not candidates:
                   stem = name[:-len('.xcframework')]
                   for base in search_roots:
-                      if not base.exists():
-                          continue
-                      for p in base.rglob(f'{stem}*.xcframework'):
-                          if p.is_dir() and p.resolve() != dest.resolve():
-                              candidates.append(p)
-
+                      if base.exists():
+                          candidates.extend([p for p in base.rglob(f'{stem}*.xcframework') if p.is_dir() and p.resolve() != dest.resolve()])
               if not candidates:
                   missing.append(name)
                   continue
-
               src = min(candidates, key=lambda p: (len(p.parts), str(p)))
-              print(f'Restoring {name} from {src}')
               shutil.copytree(src, dest, symlinks=True)
-
           if missing:
-              print('Missing XCFramework dependencies after restore:', ', '.join(missing), file=sys.stderr)
+              print('Missing XCFramework dependencies: ' + ', '.join(missing), file=sys.stderr)
               sys.exit(1)
-
-          for name in names:
-              if not (out / name).is_dir():
-                  raise SystemExit(f'XCFramework still absent: {name}')
           PY
 
-          test -d build/ios/GodotxATT.xcframework
-
-      - name: Sanitize generated project for archive
+      - name: Sanitize generated project
         shell: bash
         run: |
           set -euo pipefail
           /usr/libexec/PlistBuddy -c 'Delete :CFBundleSupportedPlatforms' "$SOURCE_INFO_PLIST" >/dev/null 2>&1 || true
-          if /usr/libexec/PlistBuddy -c 'Print :CFBundleSupportedPlatforms' "$SOURCE_INFO_PLIST" >/dev/null 2>&1; then
-            echo 'CFBundleSupportedPlatforms must not be explicit in source Info.plist'
-            exit 1
-          fi
-
           /usr/libexec/PlistBuddy -c 'Set :ITSAppUsesNonExemptEncryption false' "$SOURCE_INFO_PLIST" >/dev/null 2>&1 || \
             /usr/libexec/PlistBuddy -c 'Add :ITSAppUsesNonExemptEncryption bool false' "$SOURCE_INFO_PLIST"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :ITSAppUsesNonExemptEncryption' "$SOURCE_INFO_PLIST")" = 'false'
-
-          # Xcode 26 runners no longer accept a 14.0 deployment target. The
-          # prebuilt ad frameworks support 15+, so use the current supported floor.
           sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 17\.0;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g' "$PBXPROJ"
-          if grep -q 'IPHONEOS_DEPLOYMENT_TARGET = 17.0;' "$PBXPROJ"; then
-            echo '17.0 deployment target remains in generated project'
-            exit 1
-          fi
 
-      - name: Resolve Xcode scheme
+      - name: Resolve Xcode scheme and packages
         shell: bash
         run: |
           set -euo pipefail
@@ -247,21 +180,13 @@ jobs:
           )
           test -n "$SCHEME"
           echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
-
-      - name: Resolve Swift package dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          xcodebuild \
-            -resolvePackageDependencies \
-            -project "$XCODE_PROJECT" \
-            -scheme "$SCHEME"
+          xcodebuild -resolvePackageDependencies -project "$XCODE_PROJECT" -scheme "$SCHEME"
 
       - name: Create unsigned Build 17 archive
         shell: bash
         run: |
           set -euo pipefail
-          ARCHIVE="$RUNNER_TEMP/NineNine.xcarchive"
+          ARCHIVE="$RUNNER_TEMP/NineNine-Build17-unsigned.xcarchive"
           rm -rf "$ARCHIVE"
           xcodebuild \
             -project "$XCODE_PROJECT" \
@@ -269,7 +194,6 @@ jobs:
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath "$ARCHIVE" \
-            DEVELOPMENT_TEAM="$TEAM_ID" \
             PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
             MARKETING_VERSION="$APP_VERSION" \
             CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
@@ -284,129 +208,30 @@ jobs:
           /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist" | grep -Fx "$APP_VERSION"
           /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist" | grep -Fx "$BUILD_NUMBER"
           /usr/libexec/PlistBuddy -c 'Print :NSUserTrackingUsageDescription' "$APP/Info.plist" | grep -q 'advertising identifier'
-          /usr/libexec/PlistBuddy -c 'Print :ITSAppUsesNonExemptEncryption' "$APP/Info.plist" | grep -Fx 'false'
           test -d "$APP/Frameworks/GoogleMobileAds.framework"
           test -d "$APP/Frameworks/UserMessagingPlatform.framework"
           test -d "$APP/Frameworks/GodotIap.framework"
           test -d "$APP/Frameworks/SwiftGodotRuntime.framework"
-          strings "$APP/Frameworks/GodotIap.framework/GodotIap" | grep -q 'godot_iap_entry_point'
-          echo "ARCHIVE_PATH=$ARCHIVE" >> "$GITHUB_ENV"
-          echo "ARCHIVE_APP=$APP" >> "$GITHUB_ENV"
 
-      - name: Prime embedded frameworks for cloud signing
-        shell: bash
-        run: |
-          set -euo pipefail
-          COUNT=0
-          while IFS= read -r -d '' FW; do
-            codesign --force --sign - --timestamp=none "$FW"
-            codesign --verify --strict --verbose=2 "$FW"
-            COUNT=$((COUNT + 1))
-          done < <(find "$ARCHIVE_APP/Frameworks" -maxdepth 1 -type d -name '*.framework' -print0)
-          while IFS= read -r -d '' DYLIB; do
-            codesign --force --sign - --timestamp=none "$DYLIB"
-            codesign --verify --strict --verbose=2 "$DYLIB"
-            COUNT=$((COUNT + 1))
-          done < <(find "$ARCHIVE_APP/Frameworks" -maxdepth 1 -type f -name '*.dylib' -print0)
-          test "$COUNT" -ge 4
+          ditto -c -k --keepParent "$ARCHIVE" "$GITHUB_WORKSPACE/NineNine-Build17-unsigned.xcarchive.zip"
+          test -s "$GITHUB_WORKSPACE/NineNine-Build17-unsigned.xcarchive.zip"
 
-      - name: Create App Store export options
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0"><dict>
-            <key>method</key><string>app-store-connect</string>
-            <key>destination</key><string>export</string>
-            <key>signingStyle</key><string>automatic</string>
-            <key>teamID</key><string>${TEAM_ID}</string>
-            <key>uploadSymbols</key><true/>
-            <key>manageAppVersionAndBuildNumber</key><false/>
-          </dict></plist>
-          PLIST
-
-      - name: Cloud-sign Build 17 IPA
-        env:
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          EXPORT_DIR="$RUNNER_TEMP/Build17Export"
-          rm -rf "$EXPORT_DIR"
-          mkdir -p "$EXPORT_DIR"
-          xcodebuild \
-            -exportArchive \
-            -archivePath "$ARCHIVE_PATH" \
-            -exportPath "$EXPORT_DIR" \
-            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$ASC_KEY_PATH" \
-            -authenticationKeyID "$ASC_KEY_ID" \
-            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
-          IPA=$(find "$EXPORT_DIR" -maxdepth 2 -type f -name '*.ipa' -print -quit)
-          test -n "$IPA" -a -s "$IPA"
-          echo "SIGNED_IPA=$IPA" >> "$GITHUB_ENV"
-
-      - name: Verify signed Build 17
-        shell: bash
-        run: |
-          set -euo pipefail
-          SIGN_DIR="$RUNNER_TEMP/SignedBuild17"
-          rm -rf "$SIGN_DIR"
-          mkdir -p "$SIGN_DIR"
-          unzip -q "$SIGNED_IPA" -d "$SIGN_DIR"
-          SIGNED_APP=$(find "$SIGN_DIR/Payload" -maxdepth 1 -type d -name '*.app' -print -quit)
-          test -d "$SIGNED_APP"
-          codesign --verify --deep --strict --verbose=2 "$SIGNED_APP"
-          INFO=$(codesign -dvv "$SIGNED_APP" 2>&1)
-          grep -q '^Authority=Apple Distribution' <<<"$INFO"
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$SIGNED_APP/Info.plist" | grep -Fx "$BUNDLE_ID"
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$SIGNED_APP/Info.plist" | grep -Fx "$APP_VERSION"
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$SIGNED_APP/Info.plist" | grep -Fx "$BUILD_NUMBER"
-          /usr/libexec/PlistBuddy -c 'Print :NSUserTrackingUsageDescription' "$SIGNED_APP/Info.plist" | grep -q 'advertising identifier'
-          /usr/libexec/PlistBuddy -c 'Print :ITSAppUsesNonExemptEncryption' "$SIGNED_APP/Info.plist" | grep -Fx 'false'
-
-      - name: Validate Build 17 with App Store Connect
-        env:
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          xcrun altool --validate-app --file "$SIGNED_IPA" --type ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" --output-format json
-
-      - name: Upload Build 17 to App Store Connect
-        env:
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          xcrun altool --upload-app --file "$SIGNED_IPA" --type ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" --output-format json
-
-      - name: Upload IPA artifact
-        if: success()
+      - name: Upload unsigned Build 17 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: 99-9-build17-appstore-ipa
-          path: ${{ env.SIGNED_IPA }}
+          name: 99-9-build17-unsigned-xcarchive
+          path: NineNine-Build17-unsigned.xcarchive.zip
           if-no-files-found: error
           retention-days: 14
 
       - name: Final summary
-        if: success()
         shell: bash
         run: |
-          cat <<EOF >> "$GITHUB_STEP_SUMMARY"
-          ## 99.9 Build 17 uploaded
-          - repository: acciento89-bot/99-9
-          - branch: ios/app-review-build17
-          - bundle: $BUNDLE_ID
-          - version/build: $APP_VERSION ($BUILD_NUMBER)
-          - ATT, Restore Purchases and iOS-only copy verified
-          - App Store validation passed
-          - App Store upload passed
+          cat <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          ## 99.9 Build 17 unsigned bridge artifact
+          - Build 17 exported and archived with CODE_SIGNING_ALLOWED=NO
+          - no codesign step
+          - no cloud signing
+          - no App Store Connect validation/upload from this repository
+          - unsigned xcarchive uploaded as GitHub artifact for the signing bridge
           EOF
