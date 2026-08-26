@@ -120,6 +120,7 @@ jobs:
           xcodebuild -resolvePackageDependencies -project "$XCODE_PROJECT" -scheme "$SCHEME"
 
       - name: Boot iPad simulator
+        timeout-minutes: 4
         shell: bash
         run: |
           set -euo pipefail
@@ -129,8 +130,21 @@ jobs:
           test -n "$RUNTIME"
           UDID=$(xcrun simctl create 'NineNine Store iPad' "$DEVICE_TYPE" "$RUNTIME")
           echo "UDID=$UDID" >> "$GITHUB_ENV"
-          xcrun simctl boot "$UDID"
-          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl boot "$UDID" >/dev/null 2>&1 || true
+          BOOTED=0
+          for _ in $(seq 1 60); do
+            STATE=$(xcrun simctl list devices -j | python3 -c 'import json,sys,os; d=json.load(sys.stdin); u=os.environ["UDID"]; print(next((x.get("state","") for arr in d.get("devices",{}).values() for x in arr if x.get("udid")==u),""))')
+            if [ "$STATE" = "Booted" ]; then
+              BOOTED=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$BOOTED" != 1 ]; then
+            echo "ERROR: iPad simulator did not reach Booted state"
+            xcrun simctl list devices
+            exit 1
+          fi
           xcrun simctl status_bar "$UDID" override --time '9:41' --batteryState charged --batteryLevel 100 --wifiBars 3 --cellularBars 4 >/dev/null 2>&1 || true
 
       - name: Build and capture real iPad screenshot
