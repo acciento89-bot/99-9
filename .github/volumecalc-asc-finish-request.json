@@ -1,7 +1,7 @@
 {
-  "app": "VolumeCalc",
+  "repository": "acciento89-bot/AnlagenVolumen",
   "version": "1.0",
-  "build": "2",
-  "action": "write-clean-description-with-apple-standard-eula",
-  "requested_at": "2026-08-24T17:28:00+02:00"
+  "replace_with_build": "3",
+  "resubmit": true,
+  "requested_at": "2026-08-26T18:29:00+02:00"
 }
