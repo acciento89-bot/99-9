@@ -152,8 +152,21 @@ jobs:
           out = root / 'build' / 'ios'
           pbx = out / 'NineNine.xcodeproj' / 'project.pbxproj'
           text = pbx.read_text(errors='replace')
-          names = sorted(set(re.findall(r'([A-Za-z0-9_.+-]+\.xcframework)', text)))
-          print('XCFramework references:', ', '.join(names))
+
+          # Only PBX `path = ...xcframework;` entries are real filesystem refs.
+          # Generic token scanning also matches metadata like
+          # `lastKnownFileType = wrapper.xcframework`, which is not a file.
+          path_values = re.findall(r'\bpath\s*=\s*"?([^";]+\.xcframework)"?\s*;', text)
+          names = sorted({pathlib.Path(value).name for value in path_values})
+          if not names:
+              raise SystemExit('No real XCFramework path references found in generated Xcode project')
+
+          # FBLPromises is required by the Google/Firebase dependency graph even
+          # when the generated PBX file refers to the product as Promises.
+          required = set(names)
+          required.add('FBLPromises.xcframework')
+          names = sorted(required)
+          print('Real XCFramework references:', ', '.join(names))
 
           search_roots = [
               pathlib.Path(os.environ['RUNNER_TEMP']) / 'ninenine-admob-native',
@@ -164,7 +177,9 @@ jobs:
           for name in names:
               dest = out / name
               if dest.is_dir():
+                  print(f'Already present: {name}')
                   continue
+
               candidates = []
               for base in search_roots:
                   if not base.exists():
@@ -172,12 +187,25 @@ jobs:
                   for p in base.rglob(name):
                       if p.is_dir() and p.resolve() != dest.resolve():
                           candidates.append(p)
+
+              # Some plugin release zips suffix the XCFramework directory even
+              # though the .gdip/PBX path uses the canonical basename.
+              if not candidates:
+                  stem = name[:-len('.xcframework')]
+                  for base in search_roots:
+                      if not base.exists():
+                          continue
+                      for p in base.rglob(f'{stem}*.xcframework'):
+                          if p.is_dir() and p.resolve() != dest.resolve():
+                              candidates.append(p)
+
               if not candidates:
                   missing.append(name)
                   continue
-              src = candidates[0]
+
+              src = min(candidates, key=lambda p: (len(p.parts), str(p)))
               print(f'Restoring {name} from {src}')
-              shutil.copytree(src, dest)
+              shutil.copytree(src, dest, symlinks=True)
 
           if missing:
               print('Missing XCFramework dependencies after restore:', ', '.join(missing), file=sys.stderr)
@@ -189,6 +217,7 @@ jobs:
           PY
 
           test -d build/ios/FBLPromises.xcframework
+          test -d build/ios/GodotxATT.xcframework
 
       - name: Sanitize generated project for archive
         shell: bash
