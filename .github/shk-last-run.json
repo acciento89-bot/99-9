@@ -1,11 +1,11 @@
 {
-  "run_id": 32771722225,
-  "run_url": "https://github.com/acciento89-bot/99-9/actions/runs/32771722225",
+  "run_id": 32932293861,
+  "run_url": "https://github.com/acciento89-bot/99-9/actions/runs/32932293861",
   "conclusion": "success",
-  "head_sha": "0c83343ec962f13d63dcfd79ec563d82c5df3214",
+  "head_sha": "822ea43d070b58df424fa888a93794d089be7846",
   "event": "push",
   "app": "anlagencheck",
   "marketing_version": "1.0",
-  "build_number": "3",
-  "source_ref": "main"
+  "build_number": "4",
+  "source_ref": "19f2ddb47d3ae44149695cf4c2fc284f4461b7da"
 }
