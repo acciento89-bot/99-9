@@ -1,0 +1,29 @@
+name: VolumeCalc Build 3 Review Replace
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/volumecalc-build3-review-request.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  replace-build-and-resubmit:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - name: Checkout bridge
+        uses: actions/checkout@v5
+        with:
+          path: bridge
+
+      - name: Attach VolumeCalc Build 3 and resubmit
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
+        shell: bash
+        run: bash bridge/.github/scripts/volumecalc_build3_review_replace.sh
