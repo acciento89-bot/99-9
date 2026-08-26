@@ -79,7 +79,7 @@ func _neutralize_third_party_platform_copy() -> void:
     for node in find_children("*", "Label", true, false):
         if not (node is Label):
             continue
-        var text_value := node.text
+        var text_value: String = str(node.text)
         text_value = text_value.replace("iOS + ANDROID", "ALL PLAYERS")
         text_value = text_value.replace("iOS + Android", "ALL PLAYERS")
         node.text = text_value
