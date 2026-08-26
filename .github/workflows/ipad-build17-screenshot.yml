@@ -1,0 +1,180 @@
+name: 99.9 Build 17 iPad Screenshot
+
+on:
+  push:
+    branches:
+      - ios/app-review-build17
+    paths:
+      - .github/workflows/ipad-build17-screenshot.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GODOT_VERSION: '4.7.2'
+  GODOT_TAG: '4.7.2-stable'
+  BUNDLE_ID: 'de.kamilunavo.ninenine'
+
+jobs:
+  screenshot:
+    runs-on: macos-26
+    timeout-minutes: 70
+    steps:
+      - name: Checkout Build 17 source
+        uses: actions/checkout@v5
+
+      - name: Install Godot and native iOS plugins
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/ci_install_admob.sh ios
+          bash scripts/ci_install_share_ios.sh
+          bash scripts/ci_install_att_ios.sh
+
+          curl -L --fail --retry 3 -o "$RUNNER_TEMP/godot.zip" "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_macos.universal.zip"
+          mkdir -p "$RUNNER_TEMP/godot"
+          unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP/godot"
+          GODOT="$RUNNER_TEMP/godot/Godot.app/Contents/MacOS/Godot"
+          test -x "$GODOT"
+          echo "GODOT=$GODOT" >> "$GITHUB_ENV"
+
+          T="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$T" "$RUNNER_TEMP/templates"
+          curl -L --fail --retry 3 -o "$RUNNER_TEMP/templates.tpz" "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_export_templates.tpz"
+          unzip -q "$RUNNER_TEMP/templates.tpz" -d "$RUNNER_TEMP/templates"
+          cp -R "$RUNNER_TEMP/templates/templates/." "$T/"
+          test -f "$T/ios.zip"
+
+      - name: Prepare App Store-only copy
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/prepare_ios_app_review_export.sh
+
+      - name: Export Xcode project
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/ipad
+          "$GODOT" --headless --path . --export-release "iOS Playtest" build/ipad/NineNine.zip
+          test -d build/ipad/NineNine.xcodeproj
+
+          chmod +x addons/godot-iap/scripts/fix_ios_embed.sh
+          IOS_EXPORT_DIR="$PWD/build/ipad" ./addons/godot-iap/scripts/fix_ios_embed.sh
+
+          echo "XCODE_PROJECT=$PWD/build/ipad/NineNine.xcodeproj" >> "$GITHUB_ENV"
+          echo "PBXPROJ=$PWD/build/ipad/NineNine.xcodeproj/project.pbxproj" >> "$GITHUB_ENV"
+
+      - name: Restore referenced XCFramework dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, pathlib, re, shutil, sys
+          root = pathlib.Path.cwd()
+          out = root / 'build' / 'ipad'
+          pbx = out / 'NineNine.xcodeproj' / 'project.pbxproj'
+          text = pbx.read_text(errors='replace')
+          path_values = re.findall(r'\bpath\s*=\s*"?([^";]+\.xcframework)"?\s*;', text)
+          names = sorted({pathlib.Path(value).name for value in path_values})
+          search_roots = [pathlib.Path(os.environ['RUNNER_TEMP']) / 'ninenine-admob-native', root / 'addons', root / 'ios']
+          missing = []
+          for name in names:
+              dest = out / name
+              if dest.is_dir():
+                  continue
+              candidates = []
+              for base in search_roots:
+                  if base.exists():
+                      candidates.extend([p for p in base.rglob(name) if p.is_dir() and p.resolve() != dest.resolve()])
+              if not candidates:
+                  stem = name[:-len('.xcframework')]
+                  for base in search_roots:
+                      if base.exists():
+                          candidates.extend([p for p in base.rglob(f'{stem}*.xcframework') if p.is_dir() and p.resolve() != dest.resolve()])
+              if not candidates:
+                  missing.append(name)
+                  continue
+              src = min(candidates, key=lambda p: (len(p.parts), str(p)))
+              shutil.copytree(src, dest, symlinks=True)
+          if missing:
+              print('Missing XCFramework dependencies: ' + ', '.join(missing), file=sys.stderr)
+              sys.exit(1)
+          PY
+
+      - name: Resolve scheme
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 17\.0;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g' "$PBXPROJ"
+          xcodebuild -project "$XCODE_PROJECT" -list -json > "$RUNNER_TEMP/xcode-list.json"
+          SCHEME=$(python3 - <<'PY'
+          import json, os
+          d=json.load(open(os.environ['RUNNER_TEMP']+'/xcode-list.json')).get('project',{})
+          print((d.get('schemes') or d.get('targets') or [''])[0])
+          PY
+          )
+          test -n "$SCHEME"
+          echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
+          xcodebuild -resolvePackageDependencies -project "$XCODE_PROJECT" -scheme "$SCHEME"
+
+      - name: Boot iPad simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEVICE_TYPE=$(xcrun simctl list devicetypes -j | python3 -c 'import json,sys; d=json.load(sys.stdin); xs=[x["identifier"] for x in d["devicetypes"] if ("iPad Pro 13-inch" in x["name"] or "iPad Air 13-inch" in x["name"] or "iPad Pro (12.9-inch)" in x["name"])]; print(xs[0] if xs else "")')
+          test -n "$DEVICE_TYPE"
+          RUNTIME=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; d=json.load(sys.stdin); xs=[x["identifier"] for x in d["runtimes"] if x.get("platform")=="iOS" and x.get("isAvailable")]; print(xs[-1] if xs else "")')
+          test -n "$RUNTIME"
+          UDID=$(xcrun simctl create 'NineNine Store iPad' "$DEVICE_TYPE" "$RUNTIME")
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl status_bar "$UDID" override --time '9:41' --batteryState charged --batteryLevel 100 --wifiBars 3 --cellularBars 4 >/dev/null 2>&1 || true
+
+      - name: Build and capture real iPad screenshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          DD="$RUNNER_TEMP/ninenine-ipad-dd"
+          xcodebuild \
+            -project "$XCODE_PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -destination "id=$UDID" \
+            -derivedDataPath "$DD" \
+            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+          APP=$(find "$DD/Build/Products" -maxdepth 3 -type d -name 'NineNine.app' -print -quit)
+          test -d "$APP"
+          xcrun simctl install "$UDID" "$APP"
+          xcrun simctl launch "$UDID" "$BUNDLE_ID"
+          sleep 5
+          mkdir -p "$RUNNER_TEMP/ipad-shot"
+          SHOT="$RUNNER_TEMP/ipad-shot/99-9-Build17-iPad.png"
+          xcrun simctl io "$UDID" screenshot --type=png "$SHOT"
+          test -s "$SHOT"
+          sips -g pixelWidth -g pixelHeight "$SHOT"
+
+      - name: Upload iPad screenshot artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: 99-9-build17-ipad-screenshot
+          path: ${{ runner.temp }}/ipad-shot/99-9-Build17-iPad.png
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Cleanup simulator
+        if: always()
+        shell: bash
+        run: |
+          if [ -n "${UDID:-}" ]; then
+            xcrun simctl shutdown "$UDID" >/dev/null 2>&1 || true
+            xcrun simctl delete "$UDID" >/dev/null 2>&1 || true
+          fi
