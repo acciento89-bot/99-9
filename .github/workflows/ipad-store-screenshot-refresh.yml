@@ -1,0 +1,56 @@
+name: iPad App Store Screenshot Refresh
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/ipad-store-screenshot-refresh-request.json'
+      - '.github/scripts/refresh_ipad_store_screenshots.sh'
+      - '.github/workflows/ipad-store-screenshot-refresh.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - name: Checkout bridge
+        uses: actions/checkout@v5
+
+      - name: Checkout SHK
+        uses: actions/checkout@v5
+        with:
+          repository: acciento89-bot/SHK
+          ref: main
+          path: shk
+
+      - name: Checkout VolumeCalc
+        uses: actions/checkout@v5
+        with:
+          repository: acciento89-bot/AnlagenVolumen
+          ref: main
+          path: volumecalc
+
+      - name: Install XcodeGen
+        shell: bash
+        run: brew install xcodegen
+
+      - name: Generate real iPad screenshots and replace App Store iPad media
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
+        shell: bash
+        run: bash .github/scripts/refresh_ipad_store_screenshots.sh
+
+      - name: Upload generated iPad screenshots as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kamilunavo-iPad-AppStore-Screenshots
+          path: ${{ runner.temp }}/ipad-store-screenshots/*.png
+          if-no-files-found: warn
+          retention-days: 14
