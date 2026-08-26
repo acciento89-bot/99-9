@@ -72,7 +72,8 @@ rm -rf "$ROOT" && mkdir -p "$ROOT"
 unzip -q "$ARCHIVE" -d "$ROOT"
 
 replace_app(){
-  local key="$1" folder="$2" bundle="$3" work="$RUNNER_TEMP/screens-$key"
+  local key="$1" folder="$2" bundle="$3"
+  local work="$RUNNER_TEMP/screens-$key"
   rm -rf "$work" && mkdir -p "$work"
   local folder_path="$ROOT/$folder"
   test -d "$folder_path" || { echo "ERROR: missing folder $folder"; exit 1; }
