@@ -23,4 +23,4 @@ jobs:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
         shell: bash
-        run: bash .github/scripts/store_replace_screenshots.sh
+        run: bash .github/scripts/store_replace_screenshots_from_zip.sh
