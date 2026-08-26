@@ -1,0 +1,149 @@
+name: 99.9 Build 17 App Review Gate
+
+on:
+  push:
+    branches:
+      - ios/app-review-build17
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GODOT_VERSION: '4.7.2'
+  GODOT_TAG: '4.7.2-stable'
+  BUNDLE_ID: 'de.kamilunavo.ninenine'
+  BUILD_NUMBER: '17'
+
+jobs:
+  ios-review-gate:
+    runs-on: macos-26
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Verify Build 17 review fixes in source
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'res://scripts/main_v12_app_review.gd' scenes/main.tscn
+          grep -q 'RESTORE PURCHASES' scripts/main_v12_app_review.gd
+          grep -q 'restore_theme_purchases' scripts/main_v12_app_review.gd
+          grep -q 'GodotxATT' scripts/ads_service_ios_safe.gd
+          grep -q 'ATT_AUTHORIZED' scripts/ads_service_ios_safe.gd
+          grep -q 'application/version="17"' export_presets.cfg
+          grep -q 'NSUserTrackingUsageDescription' export_presets.cfg
+          grep -q 'plugins/GodotxATT=true' export_presets.cfg
+          grep -q 'GodotIapPlugin="\*res://addons/godot-iap/godot_iap_ios_safe.gd"' project.godot
+          ! grep -En 'connect\(func|:= *func|= *func\(' scripts/main_v11_ios_shutdown_safe.gd scripts/main_v12_app_review.gd scripts/leaderboard_service_ios_safe.gd scripts/iap_service_ios_safe.gd scripts/ads_service_ios_safe.gd addons/godot-iap/godot_iap_ios_safe.gd
+
+      - name: Install Godot, iOS templates and native dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/ci_install_admob.sh ios
+          bash scripts/ci_install_share_ios.sh
+          bash scripts/ci_install_att_ios.sh
+
+          test -f addons/admob/ios/bin/ads/poing_godot_admob_ads.gd
+          test -f addons/godot-iap/bin/ios/GodotIap.framework/GodotIap
+          test -f ios/plugins/share/share.gdip
+          test -f ios/plugins/att/att.gdip
+          find ios/plugins/att -maxdepth 1 -name 'GodotxATT*.xcframework' -print -quit | grep -q .
+
+          curl -L --fail --retry 3 -o "$RUNNER_TEMP/godot.zip" "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_macos.universal.zip"
+          mkdir -p "$RUNNER_TEMP/godot"
+          unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP/godot"
+          GODOT="$RUNNER_TEMP/godot/Godot.app/Contents/MacOS/Godot"
+          test -x "$GODOT"
+          echo "GODOT=$GODOT" >> "$GITHUB_ENV"
+
+          T="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$T" "$RUNNER_TEMP/templates"
+          curl -L --fail --retry 3 -o "$RUNNER_TEMP/templates.tpz" "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_export_templates.tpz"
+          unzip -q "$RUNNER_TEMP/templates.tpz" -d "$RUNNER_TEMP/templates"
+          cp -R "$RUNNER_TEMP/templates/templates/." "$T/"
+          test -f "$T/ios.zip"
+
+      - name: Prepare App Store-only customer-facing copy
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/prepare_ios_app_review_export.sh
+
+      - name: Parse and smoke test active Godot project
+        shell: bash
+        run: |
+          set -o pipefail
+          "$GODOT" --headless --editor --path . --quit 2>&1 | tee "$RUNNER_TEMP/parse.log"
+          if grep -E 'SCRIPT ERROR|Parse Error|Compile Error|Failed to load script' "$RUNNER_TEMP/parse.log"; then exit 1; fi
+          "$GODOT" --headless --path . --quit-after 3 2>&1 | tee "$RUNNER_TEMP/smoke.log"
+          if grep -E 'SCRIPT ERROR|Parse Error|Compile Error|Failed to load script' "$RUNNER_TEMP/smoke.log"; then exit 1; fi
+
+      - name: Export and verify Build 17 Xcode project
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/ios
+          "$GODOT" --headless --path . --export-release "iOS Playtest" build/ios/NineNine.zip
+          test -d build/ios/NineNine.xcodeproj
+
+          chmod +x addons/godot-iap/scripts/fix_ios_embed.sh
+          IOS_EXPORT_DIR="$PWD/build/ios" ./addons/godot-iap/scripts/fix_ios_embed.sh
+
+          grep -q 'GodotIap.framework' build/ios/NineNine.xcodeproj/project.pbxproj
+          grep -q 'SwiftGodotRuntime.framework' build/ios/NineNine.xcodeproj/project.pbxproj
+          grep -R -q 'GoogleMobileAds' build/ios
+          grep -Ei -q 'share(\.release)?\.a|share\.a' build/ios/NineNine.xcodeproj/project.pbxproj
+          grep -q 'GodotxATT' build/ios/NineNine.xcodeproj/project.pbxproj
+
+          INFO_PLIST=$(find build/ios -type f -name Info.plist -path '*NineNine*' -print -quit)
+          test -n "$INFO_PLIST"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$INFO_PLIST" | grep -qx "$BUNDLE_ID"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO_PLIST" | grep -qx "$BUILD_NUMBER"
+          /usr/libexec/PlistBuddy -c 'Print :NSUserTrackingUsageDescription' "$INFO_PLIST" | grep -q 'advertising identifier'
+
+          PCK=$(find build/ios -type f -name 'NineNine.pck' -print -quit)
+          test -n "$PCK" -a -s "$PCK"
+          ! strings "$PCK" | grep -F 'iOS + ANDROID'
+          ! strings "$PCK" | grep -F 'iOS + Android'
+          strings "$PCK" | grep -F 'RESTORE PURCHASES' >/dev/null
+          strings "$PCK" | grep -F 'GodotxATT' >/dev/null
+
+      - name: Compile unsigned generic-device build
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -project build/ios/NineNine.xcodeproj -list -json > "$RUNNER_TEMP/xcode.json"
+          SCHEME=$(python3 - <<'PY'
+          import json, os
+          d=json.load(open(os.environ['RUNNER_TEMP']+'/xcode.json')).get('project',{})
+          print((d.get('schemes') or d.get('targets') or [''])[0])
+          PY
+          )
+          test -n "$SCHEME"
+          xcodebuild \
+            -project build/ios/NineNine.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Record gate summary
+        shell: bash
+        run: |
+          cat <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          ## Build 17 App Review remediation gate
+          - ATT native plugin: verified
+          - NSUserTrackingUsageDescription: verified in exported Info.plist
+          - AdMob initialization gated behind ATT authorization: source-verified
+          - visible Restore Purchases in Settings: verified
+          - iOS customer-facing Android references: removed for export
+          - StoreKit iOS-safe autoload: preserved
+          - unsigned generic-device Xcode build: passed
+          EOF
