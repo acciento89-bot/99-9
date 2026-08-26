@@ -235,3 +235,5 @@ jobs:
           - no App Store Connect validation/upload from this repository
           - unsigned xcarchive uploaded as GitHub artifact for the signing bridge
           EOF
+
+# Trigger a fresh unsigned-only Build 17 run; iPad screenshot generation stays separate.
