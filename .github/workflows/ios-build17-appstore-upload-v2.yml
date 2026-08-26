@@ -154,18 +154,12 @@ jobs:
           text = pbx.read_text(errors='replace')
 
           # Only PBX `path = ...xcframework;` entries are real filesystem refs.
-          # Generic token scanning also matches metadata like
-          # `lastKnownFileType = wrapper.xcframework`, which is not a file.
+          # Swift Package products (for example Promises/FBLPromises) are resolved
+          # by Xcode and must not be forced into the local export directory.
           path_values = re.findall(r'\bpath\s*=\s*"?([^";]+\.xcframework)"?\s*;', text)
           names = sorted({pathlib.Path(value).name for value in path_values})
           if not names:
               raise SystemExit('No real XCFramework path references found in generated Xcode project')
-
-          # FBLPromises is required by the Google/Firebase dependency graph even
-          # when the generated PBX file refers to the product as Promises.
-          required = set(names)
-          required.add('FBLPromises.xcframework')
-          names = sorted(required)
           print('Real XCFramework references:', ', '.join(names))
 
           search_roots = [
@@ -216,7 +210,6 @@ jobs:
                   raise SystemExit(f'XCFramework still absent: {name}')
           PY
 
-          test -d build/ios/FBLPromises.xcframework
           test -d build/ios/GodotxATT.xcframework
 
       - name: Sanitize generated project for archive
@@ -254,6 +247,15 @@ jobs:
           )
           test -n "$SCHEME"
           echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
+
+      - name: Resolve Swift package dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -resolvePackageDependencies \
+            -project "$XCODE_PROJECT" \
+            -scheme "$SCHEME"
 
       - name: Create unsigned Build 17 archive
         shell: bash
