@@ -1,0 +1,22 @@
+name: Trigger Clean Apple Build 17
+
+on:
+  push:
+    branches:
+      - ios/app-review-build17
+    paths:
+      - .github/workflows/trigger-build17-apple-clean.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger unsigned Apple-only Build 17
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run ios-build17-appstore-upload-v2.yml --repo "$GITHUB_REPOSITORY" --ref ios/app-review-build17
