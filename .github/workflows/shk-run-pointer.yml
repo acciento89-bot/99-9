@@ -11,37 +11,11 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
     steps:
       - name: Checkout bridge repository
         uses: actions/checkout@v5
         with:
           ref: main
-
-      - name: Prepare App Store review bridge inputs
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p bridge/.github/scripts
-          cp .github/scripts/shk_build3_review_replace.sh bridge/.github/scripts/shk_build3_review_replace.sh
-          cp .github/shk-build4-review-request.json bridge/.github/shk-build4-review-request.json
-          cp .github/volumecalc-build3-review-request.json bridge/.github/volumecalc-build3-review-request.json
-
-      - name: Resubmit five redesigned SHK apps with Build 4
-        env:
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-          ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
-        shell: bash
-        run: bash .github/scripts/shk_build4_review_replace.sh
-
-      - name: Resubmit redesigned VolumeCalc with Build 3
-        env:
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-          ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
-        shell: bash
-        run: bash .github/scripts/volumecalc_build3_review_replace.sh
 
       - name: Publish last SHK bridge run
         env:
