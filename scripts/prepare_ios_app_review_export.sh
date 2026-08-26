@@ -6,6 +6,7 @@ cd "$ROOT_DIR"
 
 python3 - <<'PY'
 from pathlib import Path
+import re
 
 # 1) Remove Android-only project settings from the Apple review copy.
 project = Path("project.godot")
@@ -34,7 +35,8 @@ text = text.replace('OS.get_name() not in ["iOS", "Android"]', 'OS.get_name() !=
 text = text.replace('var unit_id := TEST_INTERSTITIAL_ANDROID if OS.get_name() == "Android" else INTERSTITIAL_IOS', 'var unit_id := INTERSTITIAL_IOS')
 ads.write_text(text, encoding="utf-8")
 
-# 4) Remove every customer-facing third-party-platform wording variant from scripts.
+# 4) Remove every customer-facing third-party-platform wording and stale Android
+# platform-detection branch from scripts that are bundled by Godot all_resources.
 replacements = {
     "iOS + ANDROID": "ALL PLAYERS",
     "iOS + Android": "ALL PLAYERS",
@@ -47,8 +49,12 @@ for path in Path("scripts").glob("*.gd"):
     updated = source
     for old, new in replacements.items():
         updated = updated.replace(old, new)
-    # Remove stale explanatory wording in the iOS-safe service itself.
     updated = updated.replace('This remains iOS-only and does not alter the Android path.', 'This remains iOS-only for the App Store build.')
+    updated = re.sub(
+        r'(?m)^([ \t]*)if os_name == "android":\n\1[ \t]+return "android"\n',
+        '',
+        updated,
+    )
     if updated != source:
         path.write_text(updated, encoding="utf-8")
         print(f"Sanitized iOS App Store copy in {path}")
