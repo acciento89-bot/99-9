@@ -97,8 +97,8 @@ jobs:
           grep -Ei -q 'share(\.release)?\.a|share\.a' build/ios/NineNine.xcodeproj/project.pbxproj
           grep -q 'GodotxATT' build/ios/NineNine.xcodeproj/project.pbxproj
 
-          INFO_PLIST=$(find build/ios -type f -name Info.plist -path '*NineNine*' -print -quit)
-          test -n "$INFO_PLIST"
+          INFO_PLIST="build/ios/NineNine/NineNine-Info.plist"
+          test -f "$INFO_PLIST"
           /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$INFO_PLIST" | grep -qx "$BUNDLE_ID"
           /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO_PLIST" | grep -qx "$BUILD_NUMBER"
           /usr/libexec/PlistBuddy -c 'Print :NSUserTrackingUsageDescription' "$INFO_PLIST" | grep -q 'advertising identifier'
