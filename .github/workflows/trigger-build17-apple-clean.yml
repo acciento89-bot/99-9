@@ -1,4 +1,4 @@
-name: Trigger Clean Apple Build 17
+name: Trigger Clean iPad Screenshot
 
 on:
   push:
@@ -16,7 +16,7 @@ jobs:
   trigger:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger unsigned Apple-only Build 17
+      - name: Trigger Apple-only iPad screenshot
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run ios-build17-appstore-upload-v2.yml --repo "$GITHUB_REPOSITORY" --ref ios/app-review-build17
+        run: gh workflow run ipad-build17-screenshot.yml --repo "$GITHUB_REPOSITORY" --ref ios/app-review-build17
