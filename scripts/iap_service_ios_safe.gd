@@ -13,18 +13,14 @@ func start_store() -> void:
         return
     _started = true
 
-    # The Godot IAP editor plugin exports /root/GodotIapPlugin as an autoload.
-    # Reuse that already-initialized wrapper on iOS. Creating a second wrapper
-    # here is invalid because GodotIapWrapper intentionally guards native setup
-    # with a static _is_initialized flag; the second instance therefore has no
-    # native StoreKit bridge and init_connection() always returns false.
+    # Reuse the editor-plugin autoload. Creating a second wrapper can leave the
+    # duplicate without its native StoreKit bridge because initialization is
+    # guarded globally inside GodotIap.
     if iap == null or not is_instance_valid(iap):
         var autoload_iap := get_node_or_null("/root/GodotIapPlugin")
         if autoload_iap != null and is_instance_valid(autoload_iap):
             iap = autoload_iap
         else:
-            # Defensive fallback for exports where the autoload is unavailable.
-            # This remains iOS-only and does not alter the Android path.
             iap = SafeGodotIapWrapperScript.new()
             iap.name = "GodotIapIOSSafeFallback"
             add_child(iap)
@@ -44,7 +40,6 @@ func start_store() -> void:
 
     store_ready = bool(connected)
     if not store_ready:
-        # Make a failed launch recoverable when the app becomes active again.
         _started = false
         store_state_changed.emit(false, "Store connection unavailable · reopen Designs to retry")
         return
@@ -60,6 +55,57 @@ func start_store() -> void:
         store_state_changed.emit(true, "Store ready")
 
     await refresh_entitlements()
+
+# Build 18 StoreKit fix:
+# Keep the three premium designs in their own StoreKit request, matching the
+# catalog shape that already worked on physical iPhone. Remove Ads is fetched
+# separately so an unavailable/processing auxiliary SKU can never blank the
+# entire premium design catalog.
+func _fetch_products() -> void:
+    if not store_ready or iap == null:
+        return
+
+    _catalog_loaded = false
+    products.clear()
+    prices.clear()
+    remove_ads_price = ""
+
+    var theme_request = Types.ProductRequest.new()
+    var theme_skus: Array[String] = []
+    for sku in PRODUCT_BY_THEME.values():
+        theme_skus.append(str(sku))
+    theme_request.skus = theme_skus
+    theme_request.type = Types.ProductQueryType.IN_APP
+
+    var theme_fetched = await iap.fetch_products(theme_request)
+    if (not (theme_fetched is Array)) or theme_fetched.is_empty():
+        # One short retry covers the occasional TestFlight StoreKit catalogue
+        # race without turning an initial empty response into a permanent UI
+        # state for this app session.
+        await get_tree().create_timer(0.6).timeout
+        if _ios_suspended or _ios_terminating or not is_inside_tree():
+            return
+        theme_fetched = await iap.fetch_products(theme_request)
+
+    if theme_fetched is Array and not theme_fetched.is_empty():
+        _consume_products(theme_fetched)
+    else:
+        _catalog_loaded = true
+        products_updated.emit(prices.duplicate())
+
+    if _ios_suspended or _ios_terminating or not is_inside_tree():
+        return
+
+    var remove_request = Types.ProductRequest.new()
+    var remove_skus: Array[String] = [REMOVE_ADS_PRODUCT]
+    remove_request.skus = remove_skus
+    remove_request.type = Types.ProductQueryType.IN_APP
+
+    var remove_fetched = await iap.fetch_products(remove_request)
+    if remove_fetched is Array and not remove_fetched.is_empty():
+        _consume_products(remove_fetched)
+    else:
+        remove_ads_product_updated.emit(remove_ads_price)
 
 func _notification(what: int) -> void:
     if OS.get_name() != "iOS":
