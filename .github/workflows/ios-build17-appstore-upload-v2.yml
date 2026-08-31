@@ -1,4 +1,4 @@
-name: 99.9 Build 17 Unsigned Bridge Artifact
+name: 99.9 Build 18 Privacy Fix Upload
 
 on:
   push:
@@ -16,17 +16,18 @@ env:
   GODOT_TAG: '4.7.2-stable'
   BUNDLE_ID: 'de.kamilunavo.ninenine'
   APP_VERSION: '1.0.0'
-  BUILD_NUMBER: '17'
+  BUILD_NUMBER: '18'
+  TEAM_ID: 'TKG684N5GL'
 
 jobs:
-  build-unsigned:
+  build-sign-upload:
     runs-on: macos-26
     timeout-minutes: 70
     steps:
-      - name: Checkout Build 17 source
+      - name: Checkout Build 18 source
         uses: actions/checkout@v5
 
-      - name: Verify Build 17 App Review source
+      - name: Verify Build 18 privacy remediation
         shell: bash
         run: |
           set -euo pipefail
@@ -38,9 +39,30 @@ jobs:
           grep -q 'ATT_AUTHORIZED' scripts/ads_service_ios_safe.gd
           grep -q 'NSUserTrackingUsageDescription' export_presets.cfg
           grep -q 'plugins/GodotxATT=true' export_presets.cfg
-          grep -q 'application/version="17"' export_presets.cfg
+          grep -q 'application/version="18"' export_presets.cfg
           grep -q 'GodotIapPlugin="\*res://addons/godot-iap/godot_iap_ios_safe.gd"' project.godot
           ! grep -q 'com.kamilunavo.game999' project.godot scripts/*.gd export_presets.cfg
+          grep -q 'native_share.call("shareText"' scripts/main_v9.gd
+          ! grep -q 'native_share.call("shareImage"' scripts/main_v9.gd
+
+      - name: Prepare App Store Connect key
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$ASC_ISSUER_ID"
+          test -n "$ASC_KEY_ID"
+          test -n "$ASC_PRIVATE_KEY_B64"
+          KEY_DIR="$HOME/.appstoreconnect/private_keys"
+          mkdir -p "$KEY_DIR"
+          KEY_PATH="$KEY_DIR/AuthKey_${ASC_KEY_ID}.p8"
+          printf '%s' "$ASC_PRIVATE_KEY_B64" | tr -d '\r\n ' | base64 --decode > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          grep -q 'PRIVATE KEY' "$KEY_PATH"
+          echo "ASC_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
 
       - name: Install Godot and native iOS plugins
         shell: bash
@@ -86,7 +108,7 @@ jobs:
           "$GODOT" --headless --path . --quit-after 3 2>&1 | tee "$RUNNER_TEMP/smoke.log"
           if grep -E 'SCRIPT ERROR|Parse Error|Compile Error|Failed to load script' "$RUNNER_TEMP/smoke.log"; then exit 1; fi
 
-      - name: Export Build 17 Xcode project
+      - name: Export Build 18 Xcode project
         shell: bash
         run: |
           set -euo pipefail
@@ -108,7 +130,7 @@ jobs:
           grep -Ei -q 'share(\.release)?\.a|share\.a' "$PBX"
           grep -q 'GodotxATT' "$PBX"
           grep -Fq "$BUNDLE_ID" "$PBX"
-          grep -Eq 'CURRENT_PROJECT_VERSION = 17;' "$PBX"
+          grep -Eq 'CURRENT_PROJECT_VERSION = 18;' "$PBX"
           /usr/libexec/PlistBuddy -c 'Print :NSUserTrackingUsageDescription' "$INFO_PLIST" | grep -q 'advertising identifier'
 
           PCK=$(find build/ios -type f -name 'NineNine.pck' -print -quit)
@@ -163,6 +185,13 @@ jobs:
         run: |
           set -euo pipefail
           /usr/libexec/PlistBuddy -c 'Delete :CFBundleSupportedPlatforms' "$SOURCE_INFO_PLIST" >/dev/null 2>&1 || true
+          for key in NSPhotoLibraryUsageDescription NSPhotoLibraryAddUsageDescription NSCameraUsageDescription NSMicrophoneUsageDescription; do
+            /usr/libexec/PlistBuddy -c "Delete :$key" "$SOURCE_INFO_PLIST" >/dev/null 2>&1 || true
+            if /usr/libexec/PlistBuddy -c "Print :$key" "$SOURCE_INFO_PLIST" >/dev/null 2>&1; then
+              echo "Unused privacy key remains in Info.plist: $key"
+              exit 1
+            fi
+          done
           /usr/libexec/PlistBuddy -c 'Set :ITSAppUsesNonExemptEncryption false' "$SOURCE_INFO_PLIST" >/dev/null 2>&1 || \
             /usr/libexec/PlistBuddy -c 'Add :ITSAppUsesNonExemptEncryption bool false' "$SOURCE_INFO_PLIST"
           sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 17\.0;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g' "$PBXPROJ"
@@ -182,11 +211,11 @@ jobs:
           echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
           xcodebuild -resolvePackageDependencies -project "$XCODE_PROJECT" -scheme "$SCHEME"
 
-      - name: Create unsigned Build 17 archive
+      - name: Create unsigned Build 18 archive
         shell: bash
         run: |
           set -euo pipefail
-          ARCHIVE="$RUNNER_TEMP/NineNine-Build17-unsigned.xcarchive"
+          ARCHIVE="$RUNNER_TEMP/NineNine-Build18-unsigned.xcarchive"
           rm -rf "$ARCHIVE"
           xcodebuild \
             -project "$XCODE_PROJECT" \
@@ -208,32 +237,102 @@ jobs:
           /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist" | grep -Fx "$APP_VERSION"
           /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist" | grep -Fx "$BUILD_NUMBER"
           /usr/libexec/PlistBuddy -c 'Print :NSUserTrackingUsageDescription' "$APP/Info.plist" | grep -q 'advertising identifier'
+          for key in NSPhotoLibraryUsageDescription NSPhotoLibraryAddUsageDescription NSCameraUsageDescription NSMicrophoneUsageDescription; do
+            if /usr/libexec/PlistBuddy -c "Print :$key" "$APP/Info.plist" >/dev/null 2>&1; then
+              echo "Unused privacy key found in archived app: $key"
+              exit 1
+            fi
+          done
           test -d "$APP/Frameworks/GoogleMobileAds.framework"
           test -d "$APP/Frameworks/UserMessagingPlatform.framework"
           test -d "$APP/Frameworks/GodotIap.framework"
           test -d "$APP/Frameworks/SwiftGodotRuntime.framework"
 
-          ditto -c -k --keepParent "$ARCHIVE" "$GITHUB_WORKSPACE/NineNine-Build17-unsigned.xcarchive.zip"
-          test -s "$GITHUB_WORKSPACE/NineNine-Build17-unsigned.xcarchive.zip"
+          echo "ARCHIVE_PATH=$ARCHIVE" >> "$GITHUB_ENV"
+          echo "ARCHIVE_APP=$APP" >> "$GITHUB_ENV"
 
-      - name: Upload unsigned Build 17 artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: 99-9-build17-unsigned-xcarchive
-          path: NineNine-Build17-unsigned.xcarchive.zip
-          if-no-files-found: error
-          retention-days: 14
+      - name: Prime embedded frameworks for cloud signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          COUNT=0
+          while IFS= read -r -d '' FW; do
+            codesign --force --sign - --timestamp=none "$FW"
+            codesign --verify --strict --verbose=2 "$FW"
+            COUNT=$((COUNT + 1))
+          done < <(find "$ARCHIVE_APP/Frameworks" -maxdepth 1 -type d -name '*.framework' -print0)
+          test "$COUNT" -ge 4
+
+      - name: Create App Store export options
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>export</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>teamID</key><string>${TEAM_ID}</string>
+            <key>uploadSymbols</key><true/>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict></plist>
+          PLIST
+
+      - name: Cloud-sign Build 18 IPA
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPORT_DIR="$RUNNER_TEMP/Build18Export"
+          rm -rf "$EXPORT_DIR"
+          mkdir -p "$EXPORT_DIR"
+          xcodebuild \
+            -exportArchive \
+            -archivePath "$ARCHIVE_PATH" \
+            -exportPath "$EXPORT_DIR" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+          IPA=$(find "$EXPORT_DIR" -maxdepth 2 -type f -name '*.ipa' -print -quit)
+          test -n "$IPA" -a -s "$IPA"
+          echo "SIGNED_IPA=$IPA" >> "$GITHUB_ENV"
+
+      - name: Verify, validate and upload Build 18
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          SIGN_DIR="$RUNNER_TEMP/SignedBuild18"
+          mkdir -p "$SIGN_DIR"
+          unzip -q "$SIGNED_IPA" -d "$SIGN_DIR"
+          SIGNED_APP=$(find "$SIGN_DIR/Payload" -maxdepth 1 -type d -name '*.app' -print -quit)
+          test -d "$SIGNED_APP"
+          codesign --verify --deep --strict --verbose=2 "$SIGNED_APP"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$SIGNED_APP/Info.plist" | grep -Fx "$BUNDLE_ID"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$SIGNED_APP/Info.plist" | grep -Fx "$BUILD_NUMBER"
+          for key in NSPhotoLibraryUsageDescription NSPhotoLibraryAddUsageDescription NSCameraUsageDescription NSMicrophoneUsageDescription; do
+            if /usr/libexec/PlistBuddy -c "Print :$key" "$SIGNED_APP/Info.plist" >/dev/null 2>&1; then
+              echo "Unused privacy key found in signed IPA: $key"
+              exit 1
+            fi
+          done
+          xcrun altool --validate-app --file "$SIGNED_IPA" --type ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" --output-format json
+          xcrun altool --upload-app --file "$SIGNED_IPA" --type ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" --output-format json
 
       - name: Final summary
         shell: bash
         run: |
           cat <<'EOF' >> "$GITHUB_STEP_SUMMARY"
-          ## 99.9 Build 17 unsigned bridge artifact
-          - Build 17 exported and archived with CODE_SIGNING_ALLOWED=NO
-          - no codesign step
-          - no cloud signing
-          - no App Store Connect validation/upload from this repository
-          - unsigned xcarchive uploaded as GitHub artifact for the signing bridge
+          ## 99.9 Build 18 privacy remediation
+          - result sharing uses the text-only native share sheet
+          - unused Photo Library, Camera and Microphone purpose keys are absent
+          - signed IPA validated and uploaded to App Store Connect
           EOF
-
-# Trigger a fresh unsigned-only Build 17 run; iPad screenshot generation stays separate.

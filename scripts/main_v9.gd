@@ -37,21 +37,15 @@ func _share_result_value(value: float, streak_value: int) -> void:
     if streak_value > 1:
         message += " My streak: %d." % streak_value
 
-    var image_path := await _create_share_card(value, streak_value)
     var shared := false
 
-    # Native iOS UIActivityViewController via kyoz/godot-share.
+    # Share text only. The score does not need Photo Library access, and image
+    # sharing can expose the plugin's optional gallery-saving permission path.
     if Engine.has_singleton("Share"):
         var native_share = Engine.get_singleton("Share")
         if native_share != null:
-            if native_share.has_method("shareImage") and not image_path.is_empty():
-                native_share.call("shareImage", image_path, "99.9%", "My 99.9% result", message)
-                shared = true
-            elif native_share.has_method("shareText"):
+            if native_share.has_method("shareText"):
                 native_share.call("shareText", "99.9%", "My 99.9% result", message)
-                shared = true
-            elif native_share.has_method("share_image") and not image_path.is_empty():
-                native_share.call("share_image", image_path, "99.9%", "My 99.9% result", message)
                 shared = true
             elif native_share.has_method("share_text"):
                 native_share.call("share_text", "99.9%", "My 99.9% result", message)

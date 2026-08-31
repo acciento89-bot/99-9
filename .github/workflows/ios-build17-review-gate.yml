@@ -1,4 +1,4 @@
-name: 99.9 Build 17 App Review Gate
+name: 99.9 Build 18 App Review Gate
 
 on:
   push:
@@ -13,7 +13,7 @@ env:
   GODOT_VERSION: '4.7.2'
   GODOT_TAG: '4.7.2-stable'
   BUNDLE_ID: 'de.kamilunavo.ninenine'
-  BUILD_NUMBER: '17'
+  BUILD_NUMBER: '18'
 
 jobs:
   ios-review-gate:
@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Verify Build 17 review fixes in source
+      - name: Verify Build 18 review fixes in source
         shell: bash
         run: |
           set -euo pipefail
@@ -31,11 +31,13 @@ jobs:
           grep -q 'restore_theme_purchases' scripts/main_v12_app_review.gd
           grep -q 'GodotxATT' scripts/ads_service_ios_safe.gd
           grep -q 'ATT_AUTHORIZED' scripts/ads_service_ios_safe.gd
-          grep -q 'application/version="17"' export_presets.cfg
+          grep -q 'application/version="18"' export_presets.cfg
           grep -q 'NSUserTrackingUsageDescription' export_presets.cfg
           grep -q 'plugins/GodotxATT=true' export_presets.cfg
           grep -q 'GodotIapPlugin="\*res://addons/godot-iap/godot_iap_ios_safe.gd"' project.godot
           ! grep -En 'connect\(func|:= *func|= *func\(' scripts/main_v11_ios_shutdown_safe.gd scripts/main_v12_app_review.gd scripts/leaderboard_service_ios_safe.gd scripts/iap_service_ios_safe.gd scripts/ads_service_ios_safe.gd addons/godot-iap/godot_iap_ios_safe.gd
+          grep -q 'native_share.call("shareText"' scripts/main_v9.gd
+          ! grep -q 'native_share.call("shareImage"' scripts/main_v9.gd
 
       - name: Install Godot, iOS templates and native dependencies
         shell: bash
@@ -80,7 +82,7 @@ jobs:
           "$GODOT" --headless --path . --quit-after 3 2>&1 | tee "$RUNNER_TEMP/smoke.log"
           if grep -E 'SCRIPT ERROR|Parse Error|Compile Error|Failed to load script' "$RUNNER_TEMP/smoke.log"; then exit 1; fi
 
-      - name: Export and verify Build 17 Xcode project
+      - name: Export and verify Build 18 Xcode project
         shell: bash
         run: |
           set -euo pipefail
@@ -101,6 +103,13 @@ jobs:
           echo 'Checking exported app identity and ATT description...'
           INFO_PLIST="build/ios/NineNine/NineNine-Info.plist"
           test -f "$INFO_PLIST"
+          for key in NSPhotoLibraryUsageDescription NSPhotoLibraryAddUsageDescription NSCameraUsageDescription NSMicrophoneUsageDescription; do
+            /usr/libexec/PlistBuddy -c "Delete :$key" "$INFO_PLIST" >/dev/null 2>&1 || true
+            if /usr/libexec/PlistBuddy -c "Print :$key" "$INFO_PLIST" >/dev/null 2>&1; then
+              echo "Unused privacy key remains in Info.plist: $key"
+              exit 1
+            fi
+          done
           BUNDLE_VALUE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$INFO_PLIST")
           BUILD_VALUE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO_PLIST")
           TRACK_VALUE=$(/usr/libexec/PlistBuddy -c 'Print :NSUserTrackingUsageDescription' "$INFO_PLIST")
@@ -110,7 +119,7 @@ jobs:
           [[ "$BUNDLE_VALUE" == "$BUNDLE_ID" || "$BUNDLE_VALUE" == '$(PRODUCT_BUNDLE_IDENTIFIER)' ]]
           [[ "$BUILD_VALUE" == "$BUILD_NUMBER" || "$BUILD_VALUE" == '$(CURRENT_PROJECT_VERSION)' ]]
           grep -Fq "$BUNDLE_ID" build/ios/NineNine.xcodeproj/project.pbxproj
-          grep -Eq 'CURRENT_PROJECT_VERSION = 17;' build/ios/NineNine.xcodeproj/project.pbxproj
+          grep -Eq 'CURRENT_PROJECT_VERSION = 18;' build/ios/NineNine.xcodeproj/project.pbxproj
           grep -q 'advertising identifier' <<<"$TRACK_VALUE"
 
           echo 'Checking exported Godot package...'
@@ -148,11 +157,13 @@ jobs:
         shell: bash
         run: |
           cat <<'EOF' >> "$GITHUB_STEP_SUMMARY"
-          ## Build 17 App Review remediation gate
+          ## Build 18 App Review remediation gate
           - ATT native plugin: verified
           - NSUserTrackingUsageDescription: verified in exported Info.plist
           - AdMob initialization gated behind ATT authorization: source-verified
           - visible Restore Purchases in Settings: verified
+          - result sharing uses no Photo Library access: verified
+          - unused photo, camera and microphone purpose keys: absent
           - iOS customer-facing Android references: removed for export
           - StoreKit iOS-safe autoload: preserved
           - unsigned generic-device Xcode build: passed
