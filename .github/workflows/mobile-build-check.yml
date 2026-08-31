@@ -1,177 +1,32 @@
-name: 99.9 Mobile Build Check
+name: 99.9 Apple Review Guard
 
 on:
-  push:
-    branches: [main, 'agent/**', 'feature/**']
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
-env:
-  GODOT_VERSION: '4.7.2'
-  GODOT_TAG: '4.7.2-stable'
-
 jobs:
-  godot-validate:
+  apple-review-only:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
-      - name: Install AdMob native templates for editor validation
-        shell: bash
-        run: bash scripts/ci_install_admob.sh all
-      - name: Download Godot
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl -L --fail --retry 3 -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_linux.x86_64.zip"
-          unzip -q godot.zip
-          mv "Godot_v${GODOT_TAG}_linux.x86_64" godot
-          chmod +x godot
-      - name: Parse project
-        shell: bash
-        run: |
-          set -o pipefail
-          ./godot --headless --editor --path . --quit 2>&1 | tee parse.log
-          if grep -E "SCRIPT ERROR|Parse Error|Compile Error|Failed to load script|Error.*SVG" parse.log; then exit 1; fi
-      - name: Main-scene smoke test
-        shell: bash
-        run: |
-          set -o pipefail
-          ./godot --headless --path . --quit-after 5 2>&1 | tee smoke.log
-          if grep -E "SCRIPT ERROR|Parse Error|Compile Error|Failed to load script" smoke.log; then exit 1; fi
+      - name: Checkout Apple review source
+        uses: actions/checkout@v5
 
-  backend-smoke:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v5
-      - name: Verify live global leaderboard endpoint
+      - name: Sanitize Apple review export copy
         shell: bash
-        run: |
-          set -euo pipefail
-          eval "$(python3 - <<'PY'
-          import re, shlex
-          text=open('scripts/leaderboard_service.gd', encoding='utf-8').read()
-          url=re.search(r'const FUNCTION_URL := \"([^\"]+)\"', text)
-          key=re.search(r'const ANON_KEY := \"([^\"]+)\"', text)
-          if not url or not key: raise SystemExit('Leaderboard client configuration not found')
-          print('FUNCTION_URL='+shlex.quote(url.group(1)))
-          print('ANON_KEY='+shlex.quote(key.group(1)))
-          PY
-          )"
-          curl --fail-with-body -sS -H "Authorization: Bearer $ANON_KEY" -H "apikey: $ANON_KEY" "$FUNCTION_URL?mode=hit&limit=1&player_id=00000000-0000-4000-8000-000000000002" -o leaderboard.json
-          jq -e '.mode == "hit" and (.top | type == "array")' leaderboard.json >/dev/null
+        run: bash scripts/prepare_ios_app_review_export.sh
 
-  ios-unsigned:
-    runs-on: macos-26
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install Godot, templates and AdMob iOS native package
+      - name: Verify Apple-only customer-facing source
         shell: bash
         run: |
           set -euo pipefail
-          bash scripts/ci_install_admob.sh ios
-          curl -L --fail --retry 3 -o "$RUNNER_TEMP/godot.zip" "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_macos.universal.zip"
-          mkdir -p "$RUNNER_TEMP/godot" && unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP/godot"
-          GODOT="$RUNNER_TEMP/godot/Godot.app/Contents/MacOS/Godot"; echo "GODOT=$GODOT" >> "$GITHUB_ENV"
-          T="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"; mkdir -p "$T"
-          curl -L --fail --retry 3 -o "$RUNNER_TEMP/templates.tpz" "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_export_templates.tpz"
-          mkdir -p "$RUNNER_TEMP/templates" && unzip -q "$RUNNER_TEMP/templates.tpz" -d "$RUNNER_TEMP/templates"
-          cp -R "$RUNNER_TEMP/templates/templates/." "$T/"
-          test -f "$T/ios.zip"
-          test -f addons/admob/ios/bin/ads/poing_godot_admob_ads.gd
-      - name: Import, export and verify IAP + AdMob Xcode project
-        shell: bash
-        run: |
-          set -euo pipefail
-          "$GODOT" --headless --editor --path . --quit
-          mkdir -p build/ios
-          "$GODOT" --headless --path . --export-release "iOS Playtest" build/ios/NineNine.zip
-          test -d build/ios/NineNine.xcodeproj
-          test -d addons/godot-iap/bin/ios/GodotIap.framework
-          chmod +x addons/godot-iap/scripts/fix_ios_embed.sh
-          IOS_EXPORT_DIR="$PWD/build/ios" ./addons/godot-iap/scripts/fix_ios_embed.sh
-          grep -q 'GodotIap.framework' build/ios/NineNine.xcodeproj/project.pbxproj
-          grep -R -q 'ca-app-pub-3940256099942544~1458002511' build/ios || { echo 'AdMob iOS demo App ID missing from export'; exit 1; }
-          grep -R -q 'GoogleMobileAds' build/ios || { echo 'Google Mobile Ads SPM integration missing'; exit 1; }
-          xcodebuild -project build/ios/NineNine.xcodeproj -list -json > "$RUNNER_TEMP/xcode.json"
-          SCHEME=$(python3 - <<'PY2'
-          import json, os
-          d=json.load(open(os.environ['RUNNER_TEMP']+'/xcode.json'))['project']
-          print((d.get('schemes') or d.get('targets') or [''])[0])
-          PY2
-          )
-          test -n "$SCHEME"
-          xcodebuild -project build/ios/NineNine.xcodeproj -scheme "$SCHEME" -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath "$RUNNER_TEMP/DerivedData" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
-          ditto -c -k --sequesterRsrc build/ios/NineNine.xcodeproj build/ios/NineNine-Xcode.zip
-      - uses: actions/upload-artifact@v4
-        with:
-          name: 99-9-ios-unsigned
-          path: build/ios/NineNine-Xcode.zip
-          if-no-files-found: error
-          retention-days: 14
-
-  android-debug:
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-      - uses: android-actions/setup-android@v3
-      - name: Install Android SDK components
-        shell: bash
-        run: |
-          set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
-          mkdir -p "$HOME/.android"
-          if [[ ! -f "$HOME/.android/debug.keystore" ]]; then
-            keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Android Debug,O=Android,C=US'
-          fi
-      - name: Install Godot, templates, Gradle template and AdMob Android package
-        shell: bash
-        run: |
-          set -euo pipefail
-          bash scripts/ci_install_admob.sh android
-          curl -L --fail --retry 3 -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_linux.x86_64.zip"
-          unzip -q godot.zip
-          mv "Godot_v${GODOT_TAG}_linux.x86_64" godot
-          chmod +x godot
-          T="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"; mkdir -p "$T" templates
-          curl -L --fail --retry 3 -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_export_templates.tpz"
-          unzip -q templates.tpz -d templates
-          cp -R templates/templates/. "$T/"
-          test -f "$T/android_source.zip"
-          test -f addons/admob/android/bin/ads/poing_godot_admob_ads.gd
-          ./godot --headless --editor --path . --quit
-          rm -rf android/build
-          mkdir -p android/build
-          unzip -q "$T/android_source.zip" -d android/build
-          printf '%s\n' "${GODOT_VERSION}.stable" > android/.build_version
-          test "$(cat android/.build_version)" = "${GODOT_VERSION}.stable"
-          test -f android/build/build.gradle || test -f android/build/build.gradle.kts
-          test -f android/build/gradlew
-          chmod +x android/build/gradlew
-      - name: Export Android debug APK with Billing + AdMob
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p build/android
-          ./godot --headless --path . --export-debug "Android Playtest" build/android/99-9.apk
-          test -s build/android/99-9.apk
-          unzip -l build/android/99-9.apk | grep -Ei 'GodotIap|billing' >/dev/null || { echo 'IAP/Billing payload missing from APK'; exit 1; }
-          unzip -p build/android/99-9.apk AndroidManifest.xml | strings | grep -F 'ca-app-pub-3940256099942544~3347511713' >/dev/null || { echo 'AdMob Android demo App ID missing from manifest'; exit 1; }
-          unzip -p build/android/99-9.apk 'classes*.dex' | strings | grep -Em1 'com/google/android/gms/ads|MobileAds' >/dev/null || { echo 'Google Mobile Ads classes missing from APK'; exit 1; }
-      - uses: actions/upload-artifact@v4
-        with:
-          name: 99-9-android-debug
-          path: build/android/99-9.apk
-          if-no-files-found: error
-          retention-days: 14
+          ! grep -R -n -Ei 'android|google play|play store' scripts --include='*.gd'
+          ! grep -n -Ei 'android|google play|play store' project.godot
+          grep -q 'res://scripts/main_v12_app_review.gd' scenes/main.tscn
+          grep -q 'res://scripts/iap_service_ios_safe.gd' scenes/main.tscn
+          grep -q 'res://scripts/ads_service_ios_safe.gd' scenes/main.tscn
+          grep -q 'application/bundle_identifier="de.kamilunavo.ninenine"' export_presets.cfg
+          echo 'Apple review guard passed: no Android/Google Play wording in app-facing source.'

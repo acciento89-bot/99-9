@@ -1,0 +1,144 @@
+name: 99.9 App Store Free Pricing V2
+
+on:
+  push:
+    branches:
+      - ios/storekit-connection-fix
+    paths:
+      - '.github/workflows/ios-appstore-pricing-fix-v2.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  BUNDLE_ID: de.kamilunavo.ninenine
+
+jobs:
+  pricing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ios/storekit-connection-fix
+
+      - run: python3 -m pip install --quiet pyjwt cryptography requests
+
+      - name: Set free app price
+        id: pricing
+        shell: bash
+        run: |
+          set +e
+          mkdir -p validation
+          python3 - <<'PY' 2>&1 | tee /tmp/pricing.log
+          import os,time,base64,json
+          from decimal import Decimal
+          import jwt,requests
+
+          BASE='https://api.appstoreconnect.apple.com/v1'
+          kid=os.environ['ASC_KEY_ID']; iss=os.environ['ASC_ISSUER_ID']
+          pk=base64.b64decode(os.environ['ASC_PRIVATE_KEY_B64']).decode()
+          now=int(time.time())
+          tok=jwt.encode({'iss':iss,'iat':now,'exp':now+1100,'aud':'appstoreconnect-v1'},pk,algorithm='ES256',headers={'kid':kid,'typ':'JWT'})
+          H={'Authorization':f'Bearer {tok}','Content-Type':'application/json'}
+
+          def req(m,p,params=None,body=None,ok=(200,201,204)):
+              r=requests.request(m,BASE+p,headers=H,params=params,json=body,timeout=45)
+              if r.status_code not in ok:
+                  print(m,p,r.status_code)
+                  try: print(json.dumps(r.json(),indent=2))
+                  except Exception: print(r.text)
+                  raise RuntimeError(f'{m} {p} HTTP {r.status_code}')
+              if r.status_code==204 or not r.content: return None
+              return r.json()
+
+          apps=req('GET','/apps',params={'filter[bundleId]':os.environ['BUNDLE_ID'],'limit':'5'})['data']
+          if len(apps)!=1: raise RuntimeError('App lookup failed')
+          app_id=apps[0]['id']
+          print('App',app_id)
+
+          points=req('GET',f'/apps/{app_id}/appPricePoints',params={
+              'filter[territory]':'DEU',
+              'include':'territory',
+              'limit':'200',
+              'fields[appPricePoints]':'customerPrice,territory',
+              'fields[territories]':'currency'
+          })
+          free=[]
+          for p in points['data']:
+              try:
+                  if Decimal(str(p.get('attributes',{}).get('customerPrice','-1')))==0:
+                      free.append(p)
+              except Exception:
+                  pass
+          if not free:
+              raise RuntimeError('No DEU free app price point returned by Apple')
+          pp=free[0]['id']
+          print('Free price point',pp)
+
+          temp='${free-price-0}'
+          body={
+              'data':{
+                  'type':'appPriceSchedules',
+                  'relationships':{
+                      'app':{'data':{'type':'apps','id':app_id}},
+                      'baseTerritory':{'data':{'type':'territories','id':'DEU'}},
+                      'manualPrices':{'data':[{'type':'appPrices','id':temp}]}
+                  }
+              },
+              'included':[{
+                  'type':'appPrices',
+                  'id':temp,
+                  'attributes':{'startDate':None,'endDate':None},
+                  'relationships':{
+                      'appPricePoint':{'data':{'type':'appPricePoints','id':pp}}
+                  }
+              }]
+          }
+          req('POST','/appPriceSchedules',body=body)
+          print('FREE PRICE SCHEDULE CREATED')
+
+          # Verify manual base price is zero.
+          sched=req('GET',f'/apps/{app_id}/appPriceSchedule')['data']
+          sid=sched['id']
+          manual=req('GET',f'/appPriceSchedules/{sid}/manualPrices',params={
+              'include':'appPricePoint,territory',
+              'limit':'200',
+              'fields[appPricePoints]':'customerPrice',
+              'fields[territories]':'currency'
+          })
+          prices=[Decimal(str(x.get('attributes',{}).get('customerPrice','-1'))) for x in manual.get('included',[]) if x.get('type')=='appPricePoints']
+          if Decimal('0') not in prices:
+              raise RuntimeError(f'Free price verification failed: {prices}')
+          with open('validation/appstore-pricing-result.txt','w') as f:
+              f.write('result=success\nbundle=de.kamilunavo.ninenine\napp_price=FREE\nbase_territory=DEU\n')
+          PY
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -ne 0 ]; then
+            { echo 'result=failure'; echo 'bundle=de.kamilunavo.ninenine'; tail -n 50 /tmp/pricing.log; } > validation/appstore-pricing-result.txt
+            echo 'result=failure' >> "$GITHUB_OUTPUT"
+          else
+            echo 'result=success' >> "$GITHUB_OUTPUT"
+          fi
+          exit 0
+
+      - name: Record result
+        if: always()
+        shell: bash
+        run: |
+          git config user.name 'Kamilunavo Release Bot'
+          git config user.email 'acciento89@gmail.com'
+          git add validation/appstore-pricing-result.txt
+          if ! git diff --cached --quiet; then
+            git commit -m 'Record 99.9 App Store pricing result'
+            git push origin HEAD:ios/storekit-connection-fix
+          fi
+
+      - name: Fail if pricing failed
+        if: steps.pricing.outputs.result != 'success'
+        run: exit 1

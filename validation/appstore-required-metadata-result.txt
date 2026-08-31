@@ -1,0 +1,21 @@
+result=failure
+bundle=de.kamilunavo.ninenine
+--- last log lines ---
+App: 6804225589
+contentRightsDeclaration=USES_THIRD_PARTY_CONTENT
+GET /appPriceSchedules/6804225589/manualPrices 404
+{
+  "errors": [
+    {
+      "id": "6b420f9c-6010-4335-bd0f-3df57cd0ba2f",
+      "status": "404",
+      "code": "NOT_FOUND",
+      "title": "The specified resource does not exist",
+      "detail": "There is no resource of type 'null' with id '6804225589'"
+    }
+  ]
+}
+Traceback (most recent call last):
+  File "<stdin>", line 37, in <module>
+  File "<stdin>", line 19, in req
+RuntimeError: GET /appPriceSchedules/6804225589/manualPrices HTTP 404

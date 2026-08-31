@@ -2,6 +2,7 @@ extends Node
 
 const Types = preload("res://addons/godot-iap/types.gd")
 const GodotIapWrapperScript = preload("res://addons/godot-iap/godot_iap.gd")
+const IOS_GDEXTENSION_PATH := "res://addons/godot-iap/bin/godot_iap.gdextension"
 
 signal store_state_changed(ready: bool, message: String)
 signal products_updated(prices: Dictionary)
@@ -30,13 +31,16 @@ var _started := false
 var _catalog_loaded := false
 
 func start_store() -> void:
-    if _started:
+    if _started and store_ready:
         return
     _started = true
 
     if OS.get_name() not in ["iOS", "Android"]:
         store_state_changed.emit(false, "Store available on iOS / Android device")
         return
+
+    if OS.get_name() == "iOS":
+        _ensure_ios_native_extension()
 
     iap = get_node_or_null("/root/GodotIapPlugin")
     if iap == null:
@@ -52,8 +56,14 @@ func start_store() -> void:
 
     store_state_changed.emit(false, "Connecting to store...")
     var connected = await iap.init_connection()
+    if not bool(connected) and OS.get_name() == "iOS":
+        await get_tree().create_timer(0.35).timeout
+        _ensure_ios_native_extension()
+        connected = await iap.init_connection()
+
     store_ready = bool(connected)
     if not store_ready:
+        _started = false
         store_state_changed.emit(false, "Store connection unavailable")
         return
 
@@ -66,6 +76,16 @@ func start_store() -> void:
         store_state_changed.emit(true, "Store ready")
 
     await refresh_entitlements()
+
+func _ensure_ios_native_extension() -> void:
+    if OS.get_name() != "iOS" or ClassDB.class_exists("GodotIap"):
+        return
+    if not FileAccess.file_exists(IOS_GDEXTENSION_PATH):
+        push_error("[99.9 IAP] Missing iOS GDExtension descriptor")
+        return
+    var load_result := GDExtensionManager.load_extension(IOS_GDEXTENSION_PATH)
+    if load_result != OK and not ClassDB.class_exists("GodotIap"):
+        push_error("[99.9 IAP] Could not load iOS StoreKit extension: %s" % load_result)
 
 func _connect_iap_signals() -> void:
     if iap == null:

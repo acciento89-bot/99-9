@@ -1,0 +1,4 @@
+result=success
+bundle=de.kamilunavo.ninenine
+app_price=FREE
+base_territory=DEU
