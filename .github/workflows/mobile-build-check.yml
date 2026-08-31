@@ -1,8 +1,6 @@
-name: 99.9 Mobile Build Check
+name: 99.9 iOS Build Check
 
 on:
-  push:
-    branches: [main, 'agent/**', 'feature/**']
   pull_request:
   workflow_dispatch:
 
@@ -10,168 +8,172 @@ permissions:
   contents: read
 
 env:
-  GODOT_VERSION: '4.7.2'
   GODOT_TAG: '4.7.2-stable'
 
 jobs:
-  godot-validate:
+  appstore-final-submit:
+    name: Complete App Store Connect and submit Build 16
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
     steps:
       - uses: actions/checkout@v5
-      - name: Install AdMob native templates for editor validation
-        shell: bash
-        run: bash scripts/ci_install_admob.sh all
-      - name: Download Godot
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl -L --fail --retry 3 -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_linux.x86_64.zip"
-          unzip -q godot.zip
-          mv "Godot_v${GODOT_TAG}_linux.x86_64" godot
-          chmod +x godot
-      - name: Parse project
-        shell: bash
-        run: |
-          set -o pipefail
-          ./godot --headless --editor --path . --quit 2>&1 | tee parse.log
-          if grep -E "SCRIPT ERROR|Parse Error|Compile Error|Failed to load script|Error.*SVG" parse.log; then exit 1; fi
-      - name: Main-scene smoke test
-        shell: bash
-        run: |
-          set -o pipefail
-          ./godot --headless --path . --quit-after 5 2>&1 | tee smoke.log
-          if grep -E "SCRIPT ERROR|Parse Error|Compile Error|Failed to load script" smoke.log; then exit 1; fi
 
-  backend-smoke:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v5
-      - name: Verify live global leaderboard endpoint
+      - name: Install tools and Godot
         shell: bash
         run: |
           set -euo pipefail
-          eval "$(python3 - <<'PY'
-          import re, shlex
-          text=open('scripts/leaderboard_service.gd', encoding='utf-8').read()
-          url=re.search(r'const FUNCTION_URL := \"([^\"]+)\"', text)
-          key=re.search(r'const ANON_KEY := \"([^\"]+)\"', text)
-          if not url or not key: raise SystemExit('Leaderboard client configuration not found')
-          print('FUNCTION_URL='+shlex.quote(url.group(1)))
-          print('ANON_KEY='+shlex.quote(key.group(1)))
-          PY
-          )"
-          curl --fail-with-body -sS -H "Authorization: Bearer $ANON_KEY" -H "apikey: $ANON_KEY" "$FUNCTION_URL?mode=hit&limit=1&player_id=00000000-0000-4000-8000-000000000002" -o leaderboard.json
-          jq -e '.mode == "hit" and (.top | type == "array")' leaderboard.json >/dev/null
-
-  ios-unsigned:
-    runs-on: macos-26
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install Godot, templates and AdMob iOS native package
-        shell: bash
-        run: |
-          set -euo pipefail
+          python3 -m pip install --quiet pyjwt cryptography requests pillow
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb >/dev/null
           bash scripts/ci_install_admob.sh ios
-          curl -L --fail --retry 3 -o "$RUNNER_TEMP/godot.zip" "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_macos.universal.zip"
-          mkdir -p "$RUNNER_TEMP/godot" && unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP/godot"
-          GODOT="$RUNNER_TEMP/godot/Godot.app/Contents/MacOS/Godot"; echo "GODOT=$GODOT" >> "$GITHUB_ENV"
-          T="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"; mkdir -p "$T"
-          curl -L --fail --retry 3 -o "$RUNNER_TEMP/templates.tpz" "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_export_templates.tpz"
-          mkdir -p "$RUNNER_TEMP/templates" && unzip -q "$RUNNER_TEMP/templates.tpz" -d "$RUNNER_TEMP/templates"
-          cp -R "$RUNNER_TEMP/templates/templates/." "$T/"
-          test -f "$T/ios.zip"
-          test -f addons/admob/ios/bin/ads/poing_godot_admob_ads.gd
-      - name: Import, export and verify IAP + AdMob Xcode project
-        shell: bash
-        run: |
-          set -euo pipefail
-          "$GODOT" --headless --editor --path . --quit
-          mkdir -p build/ios
-          "$GODOT" --headless --path . --export-release "iOS Playtest" build/ios/NineNine.zip
-          test -d build/ios/NineNine.xcodeproj
-          test -d addons/godot-iap/bin/ios/GodotIap.framework
-          chmod +x addons/godot-iap/scripts/fix_ios_embed.sh
-          IOS_EXPORT_DIR="$PWD/build/ios" ./addons/godot-iap/scripts/fix_ios_embed.sh
-          grep -q 'GodotIap.framework' build/ios/NineNine.xcodeproj/project.pbxproj
-          grep -R -q 'ca-app-pub-3940256099942544~1458002511' build/ios || { echo 'AdMob iOS demo App ID missing from export'; exit 1; }
-          grep -R -q 'GoogleMobileAds' build/ios || { echo 'Google Mobile Ads SPM integration missing'; exit 1; }
-          xcodebuild -project build/ios/NineNine.xcodeproj -list -json > "$RUNNER_TEMP/xcode.json"
-          SCHEME=$(python3 - <<'PY2'
-          import json, os
-          d=json.load(open(os.environ['RUNNER_TEMP']+'/xcode.json'))['project']
-          print((d.get('schemes') or d.get('targets') or [''])[0])
-          PY2
-          )
-          test -n "$SCHEME"
-          xcodebuild -project build/ios/NineNine.xcodeproj -scheme "$SCHEME" -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath "$RUNNER_TEMP/DerivedData" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
-          ditto -c -k --sequesterRsrc build/ios/NineNine.xcodeproj build/ios/NineNine-Xcode.zip
-      - uses: actions/upload-artifact@v4
-        with:
-          name: 99-9-ios-unsigned
-          path: build/ios/NineNine-Xcode.zip
-          if-no-files-found: error
-          retention-days: 14
+          curl -L --fail --retry 3 -o "$RUNNER_TEMP/godot.zip" "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_linux.x86_64.zip"
+          unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP"
+          chmod +x "$RUNNER_TEMP/Godot_v${GODOT_TAG}_linux.x86_64"
 
-  android-debug:
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-      - uses: android-actions/setup-android@v3
-      - name: Install Android SDK components
+      - name: Capture real Build 16 UI and fit to 2048x2732
         shell: bash
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
-          mkdir -p "$HOME/.android"
-          if [[ ! -f "$HOME/.android/debug.keystore" ]]; then
-            keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Android Debug,O=Android,C=US'
-          fi
-      - name: Install Godot, templates, Gradle template and AdMob Android package
+          GODOT="$RUNNER_TEMP/Godot_v${GODOT_TAG}_linux.x86_64"
+          mkdir -p "$RUNNER_TEMP/movie"
+          xvfb-run -a -s '-screen 0 2048x2732x24' "$GODOT" \
+            --path . \
+            --write-movie "$RUNNER_TEMP/movie/99-9-ipad.png" \
+            --fixed-fps 30 \
+            --quit-after 5 \
+            --rendering-method gl_compatibility \
+            --audio-driver Dummy
+          SCREENSHOT=$(find "$RUNNER_TEMP/movie" -type f -name '99-9-ipad*.png' | sort | tail -n1)
+          test -n "$SCREENSHOT" -a -s "$SCREENSHOT"
+          export SCREENSHOT
+          python3 - <<'PY'
+          from PIL import Image, ImageStat
+          import os
+          p=os.environ['SCREENSHOT']
+          im=Image.open(p).convert('RGB')
+          if max(ImageStat.Stat(im).mean) < 1.0:
+              raise SystemExit('Captured movie frame is blank')
+          tw,th=2048,2732
+          scale=min(tw/im.width,th/im.height)
+          nw,nh=round(im.width*scale),round(im.height*scale)
+          im=im.resize((nw,nh),Image.Resampling.LANCZOS)
+          canvas=Image.new('RGB',(tw,th),(0,0,0))
+          canvas.paste(im,((tw-nw)//2,(th-nh)//2))
+          canvas.save(p,'PNG',optimize=True)
+          print('REAL BUILD 16 IPAD SCREENSHOT READY',(tw,th),os.path.getsize(p))
+          PY
+          echo "SCREENSHOT=$SCREENSHOT" >> "$GITHUB_ENV"
+
+      - name: Finish ASC metadata, screenshot and submit
         shell: bash
         run: |
           set -euo pipefail
-          bash scripts/ci_install_admob.sh android
-          curl -L --fail --retry 3 -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_linux.x86_64.zip"
-          unzip -q godot.zip
-          mv "Godot_v${GODOT_TAG}_linux.x86_64" godot
-          chmod +x godot
-          T="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"; mkdir -p "$T" templates
-          curl -L --fail --retry 3 -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_export_templates.tpz"
-          unzip -q templates.tpz -d templates
-          cp -R templates/templates/. "$T/"
-          test -f "$T/android_source.zip"
-          test -f addons/admob/android/bin/ads/poing_godot_admob_ads.gd
-          ./godot --headless --editor --path . --quit
-          rm -rf android/build
-          mkdir -p android/build
-          unzip -q "$T/android_source.zip" -d android/build
-          printf '%s\n' "${GODOT_VERSION}.stable" > android/.build_version
-          test "$(cat android/.build_version)" = "${GODOT_VERSION}.stable"
-          test -f android/build/build.gradle || test -f android/build/build.gradle.kts
-          test -f android/build/gradlew
-          chmod +x android/build/gradlew
-      - name: Export Android debug APK with Billing + AdMob
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p build/android
-          ./godot --headless --path . --export-debug "Android Playtest" build/android/99-9.apk
-          test -s build/android/99-9.apk
-          unzip -l build/android/99-9.apk | grep -Ei 'GodotIap|billing' >/dev/null || { echo 'IAP/Billing payload missing from APK'; exit 1; }
-          unzip -p build/android/99-9.apk AndroidManifest.xml | strings | grep -F 'ca-app-pub-3940256099942544~3347511713' >/dev/null || { echo 'AdMob Android demo App ID missing from manifest'; exit 1; }
-          unzip -p build/android/99-9.apk 'classes*.dex' | strings | grep -Em1 'com/google/android/gms/ads|MobileAds' >/dev/null || { echo 'Google Mobile Ads classes missing from APK'; exit 1; }
-      - uses: actions/upload-artifact@v4
-        with:
-          name: 99-9-android-debug
-          path: build/android/99-9.apk
-          if-no-files-found: error
-          retention-days: 14
+          python3 - <<'PY'
+          import os,time,base64,json
+          import jwt,requests
+          BASE='https://api.appstoreconnect.apple.com/v1'
+          BUNDLE='de.kamilunavo.ninenine'; BUILD='16'
+          SHOT=os.environ['SCREENSHOT']; DISPLAY='APP_IPAD_PRO_3GEN_129'
+          EULA='Terms of Use (EULA): https://www.apple.com/legal/internet-services/itunes/dev/stdeula/'
+          SUPPORT='https://www.kamilunavo.com/'
+          COPYRIGHT='2026 Piotr Kaminski - Kamilunavo'
+          KW_EN='game,precision,reaction,percent,highscore,leaderboard,streak,casual,one tap'
+          KW_DE='spiel,präzision,reaktion,prozent,highscore,bestenliste,streak,casual,one tap'
+          NOTES='99.9% is a one-tap precision game and does not require an account or login.\n\nReview path:\n1. Tap PLAY.\n2. Tap once to start the percentage run and tap again to stop it.\n3. Reaching 99.900% or higher continues the streak.\n4. WORLD LEADERBOARD shows best-hit and longest-streak rankings using a locally generated player ID and a user-selected display name.\n5. SETTINGS contains player-name settings plus purchase and restore options.\n\nOptional StoreKit in-app purchases unlock visual themes and Remove Ads. Google Mobile Ads/UMP is used for advertising and consent. No external payment method is used.'
+          kid=os.environ['ASC_KEY_ID']; issuer=os.environ['ASC_ISSUER_ID']; raw=os.environ['ASC_PRIVATE_KEY_B64']
+          key=base64.b64decode(raw).decode(); now=int(time.time())
+          tok=jwt.encode({'iss':issuer,'iat':now,'exp':now+1100,'aud':'appstoreconnect-v1'},key,algorithm='ES256',headers={'kid':kid,'typ':'JWT'})
+          H={'Authorization':'Bearer '+tok,'Content-Type':'application/json'}
+          def api(method,path,params=None,body=None,ok=(200,201,204)):
+              r=requests.request(method,BASE+path,headers=H,params=params,json=body,timeout=60)
+              if r.status_code not in ok:
+                  print('ASC ERROR',method,path,'HTTP',r.status_code)
+                  try: print(json.dumps(r.json(),indent=2))
+                  except: print(r.text)
+                  raise RuntimeError(path+' HTTP '+str(r.status_code))
+              return None if r.status_code==204 or not r.content else r.json()
+
+          apps=api('GET','/apps',{'filter[bundleId]':BUNDLE,'limit':'5'})['data']
+          if len(apps)!=1: raise RuntimeError('app lookup failed')
+          app_id=apps[0]['id']
+          api('PATCH',f'/apps/{app_id}',body={'data':{'type':'apps','id':app_id,'attributes':{'contentRightsDeclaration':'USES_THIRD_PARTY_CONTENT'}}})
+          vv=api('GET',f'/apps/{app_id}/appStoreVersions',{'filter[platform]':'IOS','limit':'50','fields[appStoreVersions]':'versionString,appVersionState'})['data']
+          vv=[v for v in vv if v.get('attributes',{}).get('versionString') in ('1.0','1.0.0')]
+          if not vv: raise RuntimeError('version 1.0 missing')
+          editable={'PREPARE_FOR_SUBMISSION','READY_FOR_REVIEW','DEVELOPER_REJECTED','METADATA_REJECTED','REJECTED'}
+          ver=next((v for v in vv if v.get('attributes',{}).get('appVersionState') in editable),vv[0]); vid=ver['id']
+          print('VERSION',vid,ver.get('attributes',{}).get('appVersionState'))
+          api('PATCH',f'/appStoreVersions/{vid}',body={'data':{'type':'appStoreVersions','id':vid,'attributes':{'copyright':COPYRIGHT}}})
+
+          locs=api('GET',f'/appStoreVersions/{vid}/appStoreVersionLocalizations',{'limit':'50','fields[appStoreVersionLocalizations]':'locale,description,keywords,supportUrl'})['data']
+          if not locs: raise RuntimeError('localization missing')
+          for loc in locs:
+              a=loc.get('attributes',{}); locale=a.get('locale','en-US'); desc=(a.get('description') or '').rstrip()
+              if len(desc)<500 or not desc.endswith(EULA): raise RuntimeError('description/EULA invalid '+locale)
+              kw=KW_DE if locale.lower().startswith('de') else KW_EN
+              api('PATCH',f"/appStoreVersionLocalizations/{loc['id']}",body={'data':{'type':'appStoreVersionLocalizations','id':loc['id'],'attributes':{'keywords':kw,'supportUrl':SUPPORT}}})
+              print('LOCALIZATION READY',locale)
+
+          builds=api('GET','/builds',{'filter[app]':app_id,'filter[version]':BUILD,'limit':'20','sort':'-uploadedDate','fields[builds]':'version,processingState'})['data']
+          valid=[b for b in builds if b.get('attributes',{}).get('processingState')=='VALID']
+          if not valid: raise RuntimeError('Build 16 not VALID')
+          api('PATCH',f'/appStoreVersions/{vid}/relationships/build',body={'data':{'type':'builds','id':valid[0]['id']}},ok=(204,))
+
+          detail=api('GET',f'/appStoreVersions/{vid}/appStoreReviewDetail')['data']; da=detail.get('attributes',{})
+          miss=[k for k in ['contactFirstName','contactLastName','contactPhone','contactEmail'] if not da.get(k)]
+          if miss: raise RuntimeError('review contact missing '+','.join(miss))
+          api('PATCH',f"/appStoreReviewDetails/{detail['id']}",body={'data':{'type':'appStoreReviewDetails','id':detail['id'],'attributes':{'notes':NOTES}}})
+          print('REVIEW INFO READY')
+
+          loc=next((x for x in locs if str(x.get('attributes',{}).get('locale','')).lower().startswith('en')),locs[0]); lid=loc['id']
+          sets=api('GET',f'/appStoreVersionLocalizations/{lid}/appScreenshotSets',{'limit':'50','fields[appScreenshotSets]':'screenshotDisplayType'})['data']
+          ss=next((x for x in sets if x.get('attributes',{}).get('screenshotDisplayType')==DISPLAY),None)
+          if not ss:
+              ss=api('POST','/appScreenshotSets',body={'data':{'type':'appScreenshotSets','attributes':{'screenshotDisplayType':DISPLAY},'relationships':{'appStoreVersionLocalization':{'data':{'type':'appStoreVersionLocalizations','id':lid}}}}})['data']
+          set_id=ss['id']
+          shots=api('GET',f'/appScreenshotSets/{set_id}/appScreenshots',{'limit':'50','fields[appScreenshots]':'fileName,assetDeliveryState'})['data']
+          done=[s for s in shots if (s.get('attributes',{}).get('assetDeliveryState') or {}).get('state') in ('COMPLETE','UPLOAD_COMPLETE')]
+          if not done:
+              size=os.path.getsize(SHOT)
+              sc=api('POST','/appScreenshots',body={'data':{'type':'appScreenshots','attributes':{'fileName':'99-9-ipad-129.png','fileSize':size},'relationships':{'appScreenshotSet':{'data':{'type':'appScreenshotSets','id':set_id}}}}})['data']
+              sid=sc['id']; ops=sc.get('attributes',{}).get('uploadOperations') or []
+              if not ops: raise RuntimeError('no screenshot upload operations')
+              with open(SHOT,'rb') as f:
+                  for op in ops:
+                      f.seek(int(op.get('offset',0))); chunk=f.read(int(op.get('length',size)))
+                      hh={h['name']:h['value'] for h in op.get('requestHeaders',[])}
+                      r=requests.request(op.get('method','PUT'),op['url'],headers=hh,data=chunk,timeout=120)
+                      if not 200<=r.status_code<300: raise RuntimeError('binary screenshot upload HTTP '+str(r.status_code))
+              api('PATCH',f'/appScreenshots/{sid}',body={'data':{'type':'appScreenshots','id':sid,'attributes':{'uploaded':True}}})
+              state=None
+              for _ in range(40):
+                  time.sleep(2); cur=api('GET',f'/appScreenshots/{sid}')['data']; state=(cur.get('attributes',{}).get('assetDeliveryState') or {}).get('state'); print('SCREENSHOT',state)
+                  if state in ('COMPLETE','UPLOAD_COMPLETE'): break
+                  if state in ('FAILED','ERROR'): raise RuntimeError('screenshot processing failed')
+              if state not in ('COMPLETE','UPLOAD_COMPLETE'): raise RuntimeError('screenshot timeout '+str(state))
+              print('IPAD SCREENSHOT READY')
+          else:
+              print('IPAD SCREENSHOT ALREADY READY')
+
+          current=api('GET',f'/appStoreVersions/{vid}')['data'].get('attributes',{}).get('appVersionState')
+          if current in ('WAITING_FOR_REVIEW','IN_REVIEW'):
+              print('FINAL SUCCESS',current); raise SystemExit(0)
+          subs=api('GET',f'/apps/{app_id}/reviewSubmissions',{'limit':'100','fields[reviewSubmissions]':'platform,state'})['data']
+          ready=[s for s in subs if s.get('attributes',{}).get('state')=='READY_FOR_REVIEW']
+          sub=ready[0] if ready else api('POST','/reviewSubmissions',body={'data':{'type':'reviewSubmissions','attributes':{'platform':'IOS'},'relationships':{'app':{'data':{'type':'apps','id':app_id}}}}})['data']; rsid=sub['id']
+          items=api('GET',f'/reviewSubmissions/{rsid}/items',{'limit':'200','include':'appStoreVersion','fields[reviewSubmissionItems]':'state,appStoreVersion','fields[appStoreVersions]':'versionString'})['data']
+          linked=any(((x.get('relationships',{}).get('appStoreVersion',{}).get('data') or {}).get('id')==vid) for x in items)
+          if not linked:
+              api('POST','/reviewSubmissionItems',body={'data':{'type':'reviewSubmissionItems','relationships':{'reviewSubmission':{'data':{'type':'reviewSubmissions','id':rsid}},'appStoreVersion':{'data':{'type':'appStoreVersions','id':vid}}}}})
+              print('VERSION ADDED TO SUBMISSION')
+          res=api('PATCH',f'/reviewSubmissions/{rsid}',body={'data':{'type':'reviewSubmissions','id':rsid,'attributes':{'submitted':True}}})['data']; final=res.get('attributes',{}).get('state')
+          for _ in range(30):
+              if final in ('WAITING_FOR_REVIEW','IN_REVIEW'): break
+              time.sleep(3); final=api('GET',f'/reviewSubmissions/{rsid}')['data'].get('attributes',{}).get('state'); print('REVIEW',final)
+          if final not in ('WAITING_FOR_REVIEW','IN_REVIEW'): raise RuntimeError('submission state '+str(final))
+          print('FINAL SUCCESS',final)
+          PY

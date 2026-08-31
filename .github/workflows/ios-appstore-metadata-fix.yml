@@ -1,0 +1,158 @@
+name: 99.9 App Store Required Metadata
+
+on:
+  push:
+    branches:
+      - ios/storekit-connection-fix
+    paths:
+      - '.github/workflows/ios-appstore-metadata-fix.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  BUNDLE_ID: de.kamilunavo.ninenine
+
+jobs:
+  metadata:
+    name: Set required App Store metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ios/storekit-connection-fix
+
+      - name: Install dependencies
+        run: python3 -m pip install --quiet pyjwt cryptography requests
+
+      - name: Set Content Rights and free pricing
+        id: fix
+        shell: bash
+        run: |
+          set +e
+          mkdir -p validation
+          python3 - <<'PY' 2>&1 | tee /tmp/metadata-fix.log
+          import os, time, base64, json
+          from decimal import Decimal
+          import jwt, requests
+
+          BASE='https://api.appstoreconnect.apple.com/v1'
+          key_id=os.environ['ASC_KEY_ID']
+          issuer=os.environ['ASC_ISSUER_ID']
+          private_key=base64.b64decode(os.environ['ASC_PRIVATE_KEY_B64']).decode('utf-8')
+          now=int(time.time())
+          token=jwt.encode({'iss':issuer,'iat':now,'exp':now+1100,'aud':'appstoreconnect-v1'}, private_key, algorithm='ES256', headers={'kid':key_id,'typ':'JWT'})
+          H={'Authorization':f'Bearer {token}','Content-Type':'application/json'}
+
+          def req(method,path,params=None,body=None,ok=(200,201,204)):
+              r=requests.request(method,BASE+path,headers=H,params=params,json=body,timeout=45)
+              if r.status_code not in ok:
+                  print(method,path,r.status_code)
+                  try: print(json.dumps(r.json(),indent=2))
+                  except Exception: print(r.text)
+                  raise RuntimeError(f'{method} {path} HTTP {r.status_code}')
+              if r.status_code==204 or not r.content: return None
+              return r.json()
+
+          apps=req('GET','/apps',params={'filter[bundleId]':os.environ['BUNDLE_ID'],'limit':'5'})['data']
+          if len(apps)!=1: raise RuntimeError(f'Expected one app, found {len(apps)}')
+          app_id=apps[0]['id']
+          print('App:',app_id)
+
+          # The app displays Google AdMob interstitials, therefore it shows third-party content.
+          req('PATCH',f'/apps/{app_id}',body={'data':{'type':'apps','id':app_id,'attributes':{'contentRightsDeclaration':'USES_THIRD_PARTY_CONTENT'}}})
+          print('contentRightsDeclaration=USES_THIRD_PARTY_CONTENT')
+
+          # 99.9 is free-to-download and monetizes through ads / in-app purchases.
+          schedule_resp=requests.get(BASE+f'/apps/{app_id}/appPriceSchedule',headers=H,timeout=45)
+          has_schedule=schedule_resp.status_code==200 and bool(schedule_resp.json().get('data'))
+          if has_schedule:
+              schedule_id=schedule_resp.json()['data']['id']
+              manual=req('GET',f'/appPriceSchedules/{schedule_id}/manualPrices',params={'include':'appPricePoint,territory','limit':'200','fields[appPricePoints]':'customerPrice','fields[territories]':'currency'})
+              current_free=False
+              for inc in manual.get('included',[]):
+                  if inc.get('type')=='appPricePoints':
+                      try:
+                          if Decimal(str(inc.get('attributes',{}).get('customerPrice','-1')))==0:
+                              current_free=True
+                              break
+                      except Exception: pass
+              if current_free:
+                  print('Pricing already free.')
+              else:
+                  print('Existing price schedule is not free; replacing base price with free tier.')
+                  has_schedule=False
+
+          if not has_schedule:
+              points=req('GET',f'/apps/{app_id}/appPricePoints',params={'filter[territory]':'DEU','include':'territory','limit':'200','fields[appPricePoints]':'customerPrice,territory','fields[territories]':'currency'})
+              free_points=[]
+              for p in points['data']:
+                  try:
+                      if Decimal(str(p.get('attributes',{}).get('customerPrice','-1')))==0:
+                          free_points.append(p)
+                  except Exception: pass
+              if not free_points:
+                  raise RuntimeError('No free DEU app price point found.')
+              price_point_id=free_points[0]['id']
+              temp_id='${free-price-0}'
+              body={
+                  'data':{
+                      'type':'appPriceSchedules',
+                      'relationships':{
+                          'app':{'data':{'type':'apps','id':app_id}},
+                          'baseTerritory':{'data':{'type':'territories','id':'DEU'}},
+                          'manualPrices':{'data':[{'type':'appPrices','id':temp_id}]}
+                      }
+                  },
+                  'included':[{
+                      'type':'appPrices','id':temp_id,
+                      'attributes':{'startDate':None,'endDate':None},
+                      'relationships':{'appPricePoint':{'data':{'type':'appPricePoints','id':price_point_id}}}
+                  }]
+              }
+              req('POST','/appPriceSchedules',body=body)
+              print('Free app pricing set with DEU base territory.')
+
+          with open('validation/appstore-required-metadata-result.txt','w',encoding='utf-8') as f:
+              f.write('result=success\n')
+              f.write('bundle=de.kamilunavo.ninenine\n')
+              f.write('content_rights=USES_THIRD_PARTY_CONTENT\n')
+              f.write('app_price=FREE\n')
+          PY
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -ne 0 ]; then
+            {
+              echo 'result=failure'
+              echo 'bundle=de.kamilunavo.ninenine'
+              echo '--- last log lines ---'
+              tail -n 50 /tmp/metadata-fix.log
+            } > validation/appstore-required-metadata-result.txt
+            echo 'result=failure' >> "$GITHUB_OUTPUT"
+          else
+            echo 'result=success' >> "$GITHUB_OUTPUT"
+          fi
+          exit 0
+
+      - name: Record result
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Kamilunavo Release Bot'
+          git config user.email 'acciento89@gmail.com'
+          git add validation/appstore-required-metadata-result.txt
+          if ! git diff --cached --quiet; then
+            git commit -m 'Record 99.9 required App Store metadata result'
+            git push origin HEAD:ios/storekit-connection-fix
+          fi
+
+      - name: Fail if metadata update failed
+        if: steps.fix.outputs.result != 'success'
+        run: exit 1

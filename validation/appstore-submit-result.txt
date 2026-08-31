@@ -1,0 +1,45 @@
+result=failure
+bundle=de.kamilunavo.ninenine
+build=16
+eula_at_description_end=unknown
+--- last log lines ---
+          ],
+          "/v1/apps/6804225589": [
+            {
+              "id": "a89dd42a-217f-4577-814b-ee2ea90cb4e6",
+              "status": "409",
+              "code": "ENTITY_ERROR.ATTRIBUTE.REQUIRED",
+              "title": "The provided entity is missing a required attribute",
+              "detail": "You must provide a value for the attribute 'contentRightsDeclaration' with this request",
+              "source": {
+                "pointer": "/data/attributes/contentRightsDeclaration"
+              }
+            }
+          ],
+          "/v1/appDataUsages/": [
+            {
+              "id": "cc568574-6845-467b-81a1-7e127dcaf4fc",
+              "status": "409",
+              "code": "STATE_ERROR.APP_DATA_USAGES_REQUIRED",
+              "title": "Answers to what data your app collects and how it's used are needed.",
+              "detail": "You must have published answers to your app's data usages."
+            }
+          ],
+          "/v2/appPrices/": [
+            {
+              "id": "86eb6c4a-d655-47b3-b2db-0dd0032e1f72",
+              "status": "409",
+              "code": "STATE_ERROR.APP_PRICING_REQUIRED",
+              "title": "App is missing required pricing.",
+              "detail": "App is not eligible for submission until pricing has been set."
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
+Traceback (most recent call last):
+  File "<stdin>", line 185, in <module>
+  File "<stdin>", line 31, in call
+RuntimeError: ASC request failed: POST /reviewSubmissionItems HTTP 409

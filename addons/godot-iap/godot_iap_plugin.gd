@@ -6,8 +6,10 @@ const AUTOLOAD_NAME = "GodotIapPlugin"
 var _export_plugin: GodotIapExportPlugin
 
 func _enter_tree() -> void:
-	# Add autoload singleton for easy access
-	add_autoload_singleton(AUTOLOAD_NAME, "res://addons/godot-iap/godot_iap.gd")
+	# Add autoload singleton for easy access. The iOS-safe wrapper inherits the
+	# stock implementation and only replaces the StoreKit timeout lambda path,
+	# so Android behavior remains unchanged while iOS teardown stays safe.
+	add_autoload_singleton(AUTOLOAD_NAME, "res://addons/godot-iap/godot_iap_ios_safe.gd")
 
 	# Add export plugin for Android
 	_export_plugin = GodotIapExportPlugin.new()

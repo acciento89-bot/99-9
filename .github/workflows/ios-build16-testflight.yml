@@ -1,0 +1,182 @@
+name: 99.9 Build 16 Final App Store Submit
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/ios-build16-testflight.yml'
+
+permissions:
+  contents: write
+
+env:
+  BUNDLE_ID: 'de.kamilunavo.ninenine'
+  BUILD_NUMBER: '16'
+
+jobs:
+  submit:
+    name: Finalize 99.9 metadata and submit Build 16
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
+    steps:
+      - name: Checkout 99-9
+        uses: actions/checkout@v5
+        with:
+          ref: ios/storekit-connection-fix
+
+      - name: Install ASC dependencies
+        run: python3 -m pip install --quiet pyjwt cryptography requests
+
+      - name: Finalize and submit
+        id: submit
+        shell: bash
+        run: |
+          set +e
+          mkdir -p validation
+          python3 - <<'PY' 2>&1 | tee /tmp/submit.log
+          import os,time,base64,json
+          import jwt,requests
+          BASE='https://api.appstoreconnect.apple.com/v1'
+          BUNDLE=os.environ['BUNDLE_ID']; BUILD=os.environ['BUILD_NUMBER']
+          EULA='Terms of Use (EULA): https://www.apple.com/legal/internet-services/itunes/dev/stdeula/'
+          DE='''Wie nah kommst du an 100 %?
+
+99.9% ist ein minimalistisches One-Tap-Präzisionsspiel: Starte den Lauf, beobachte die Prozentanzeige und stoppe sie im perfekten Moment. Klingt einfach – bis du versuchst, 99,900 % oder sogar exakt 100,000 % zu treffen.
+
+DEINE HERAUSFORDERUNG
+• Ein Tipp startet den Versuch, der nächste stoppt ihn.
+• Erreiche mindestens 99,900 %, um deine Serie fortzusetzen.
+• Jage deinem persönlichen Bestwert hinterher.
+• Vergleiche dich in der weltweiten Bestenliste.
+• Verfolge Bestwert, längste Serie und gespielte Runden in deinen Statistiken.
+
+SCHNELL. EINFACH. GEMEIN.
+Jeder Versuch dauert nur wenige Sekunden. Genau deshalb ist „nur noch eine Runde“ so schwer zu widerstehen.
+
+PERSONALISIERUNG
+Wähle deinen Spielernamen und passe das Erscheinungsbild mit zusätzlichen Designs an. Optionale In-App-Käufe ermöglichen weitere Designs sowie das Entfernen von Werbung.
+
+99.9% konzentriert sich auf eine einzige Frage: Wie nah kommst du wirklich an 100 %?'''
+          EN='''How close can you get to 100%?
+
+99.9% is a minimalist one-tap precision game. Start the run, watch the percentage climb, and stop it at exactly the right moment. It sounds simple—until you try to hit 99.900% or even a perfect 100.000%.
+
+YOUR CHALLENGE
+• One tap starts the attempt, the next one stops it.
+• Reach at least 99.900% to keep your streak alive.
+• Chase your personal best.
+• Compare your results on the worldwide leaderboard.
+• Track your best hit, longest streak and rounds played in your stats.
+
+FAST. SIMPLE. BRUTAL.
+Each attempt only takes a few seconds. That is exactly why “one more try” is so hard to resist.
+
+PERSONALIZE IT
+Choose your player name and customize the look with additional themes. Optional in-app purchases unlock more themes and let you remove ads.
+
+99.9% is built around one question: how close can you really get to 100%?'''
+          NOTES='''99.9% is a one-tap precision game and does not require an account or login.
+
+Review path:
+1. Tap PLAY.
+2. Tap once to start the percentage run and tap again to stop it.
+3. Reaching 99.900% or higher continues the streak.
+4. WORLD LEADERBOARD shows best-hit and longest-streak rankings using a locally generated player ID and a user-selected display name.
+5. SETTINGS contains player-name settings plus purchase and restore options.
+
+Optional StoreKit in-app purchases unlock visual themes and Remove Ads. Google Mobile Ads/UMP is used for advertising and consent. No external payment method is used.'''
+          kid=os.environ['ASC_KEY_ID']; issuer=os.environ['ASC_ISSUER_ID']; raw=os.environ['ASC_PRIVATE_KEY_B64']
+          if not kid or not issuer or not raw: raise RuntimeError('ASC credentials missing')
+          key=base64.b64decode(raw).decode(); now=int(time.time())
+          token=jwt.encode({'iss':issuer,'iat':now,'exp':now+1100,'aud':'appstoreconnect-v1'},key,algorithm='ES256',headers={'kid':kid,'typ':'JWT'})
+          H={'Authorization':f'Bearer {token}','Content-Type':'application/json'}
+          def req(method,path,params=None,body=None,ok=(200,201,204)):
+              r=requests.request(method,BASE+path,headers=H,params=params,json=body,timeout=60)
+              if r.status_code not in ok:
+                  print(f'ASC ERROR {method} {path}: HTTP {r.status_code}')
+                  try: print(json.dumps(r.json(),indent=2))
+                  except: print(r.text)
+                  raise RuntimeError(f'{method} {path} HTTP {r.status_code}')
+              if r.status_code==204 or not r.content:return None
+              return r.json()
+          apps=req('GET','/apps',{'filter[bundleId]':BUNDLE,'limit':'5'})['data']
+          if len(apps)!=1: raise RuntimeError('99.9 app lookup failed')
+          app_id=apps[0]['id']
+          req('PATCH',f'/apps/{app_id}',body={'data':{'type':'apps','id':app_id,'attributes':{'contentRightsDeclaration':'USES_THIRD_PARTY_CONTENT'}}})
+          versions=req('GET',f'/apps/{app_id}/appStoreVersions',{'filter[platform]':'IOS','limit':'50','fields[appStoreVersions]':'versionString,appVersionState'})['data']
+          versions=[v for v in versions if v.get('attributes',{}).get('versionString') in ('1.0','1.0.0')]
+          if not versions: raise RuntimeError('App Store version 1.0 missing')
+          editable={'PREPARE_FOR_SUBMISSION','READY_FOR_REVIEW','DEVELOPER_REJECTED','METADATA_REJECTED','REJECTED'}
+          version=next((v for v in versions if v.get('attributes',{}).get('appVersionState') in editable),versions[0])
+          version_id=version['id']
+          locs=req('GET',f'/appStoreVersions/{version_id}/appStoreVersionLocalizations',{'limit':'50','fields[appStoreVersionLocalizations]':'locale,description'})['data']
+          if not locs: raise RuntimeError('No localization found')
+          for loc in locs:
+              locale=loc.get('attributes',{}).get('locale','en-US'); base=DE if locale.lower().startswith('de') else EN
+              desc=base.rstrip()+'\n\n'+EULA
+              req('PATCH',f"/appStoreVersionLocalizations/{loc['id']}",body={'data':{'type':'appStoreVersionLocalizations','id':loc['id'],'attributes':{'description':desc}}})
+              print('DESCRIPTION RESTORED',locale)
+          verify=req('GET',f'/appStoreVersions/{version_id}/appStoreVersionLocalizations',{'limit':'50','fields[appStoreVersionLocalizations]':'locale,description'})['data']
+          for loc in verify:
+              d=(loc.get('attributes',{}).get('description') or '').rstrip()
+              if len(d)<500 or d==EULA or not d.endswith(EULA): raise RuntimeError('Description verification failed')
+          print('FULL DESCRIPTION + EULA VERIFIED')
+          builds=req('GET','/builds',{'filter[app]':app_id,'filter[version]':BUILD,'limit':'20','sort':'-uploadedDate','fields[builds]':'version,processingState'})['data']
+          valid=[b for b in builds if b.get('attributes',{}).get('processingState')=='VALID']
+          if not valid: raise RuntimeError('Build 16 not VALID')
+          build_id=valid[0]['id']
+          req('PATCH',f'/appStoreVersions/{version_id}/relationships/build',body={'data':{'type':'builds','id':build_id}},ok=(204,))
+          detail=req('GET',f'/appStoreVersions/{version_id}/appStoreReviewDetail')['data']
+          attrs=detail.get('attributes',{}); required=['contactFirstName','contactLastName','contactPhone','contactEmail']
+          missing=[k for k in required if not attrs.get(k)]
+          if missing: raise RuntimeError('App Review contact information incomplete: '+','.join(missing))
+          req('PATCH',f"/appStoreReviewDetails/{detail['id']}",body={'data':{'type':'appStoreReviewDetails','id':detail['id'],'attributes':{'notes':NOTES}}})
+          print('REVIEW CONTACT VERIFIED; REVIEW NOTES SET')
+          state=version.get('attributes',{}).get('appVersionState')
+          if state in {'WAITING_FOR_REVIEW','IN_REVIEW'}:
+              final_state=state; submission_id='existing'
+          else:
+              submissions=req('GET',f'/apps/{app_id}/reviewSubmissions',{'limit':'100','fields[reviewSubmissions]':'platform,state'})['data']
+              ready=[s for s in submissions if s.get('attributes',{}).get('state')=='READY_FOR_REVIEW']
+              sub=ready[0] if ready else req('POST','/reviewSubmissions',body={'data':{'type':'reviewSubmissions','attributes':{'platform':'IOS'},'relationships':{'app':{'data':{'type':'apps','id':app_id}}}}})['data']
+              submission_id=sub['id']
+              items=req('GET',f'/reviewSubmissions/{submission_id}/items',{'limit':'200','include':'appStoreVersion','fields[reviewSubmissionItems]':'state,appStoreVersion','fields[appStoreVersions]':'versionString'})['data']
+              linked=any((i.get('relationships',{}).get('appStoreVersion',{}).get('data') or {}).get('id')==version_id for i in items)
+              if not linked:req('POST','/reviewSubmissionItems',body={'data':{'type':'reviewSubmissionItems','relationships':{'reviewSubmission':{'data':{'type':'reviewSubmissions','id':submission_id}},'appStoreVersion':{'data':{'type':'appStoreVersions','id':version_id}}}}})
+              result=req('PATCH',f'/reviewSubmissions/{submission_id}',body={'data':{'type':'reviewSubmissions','id':submission_id,'attributes':{'submitted':True}}})['data']
+              final_state=result.get('attributes',{}).get('state')
+              for _ in range(18):
+                  if final_state in {'WAITING_FOR_REVIEW','IN_REVIEW'}:break
+                  time.sleep(5); result=req('GET',f'/reviewSubmissions/{submission_id}')['data']; final_state=result.get('attributes',{}).get('state')
+              if final_state not in {'WAITING_FOR_REVIEW','IN_REVIEW'}: raise RuntimeError('Submit did not reach review state: '+str(final_state))
+          with open('validation/appstore-final-submit-result.txt','w') as f:
+              f.write('result=success\nbundle='+BUNDLE+'\nbuild='+BUILD+'\ndescription_restored=true\neula_at_description_end=true\nreview_contact_verified=true\nreview_notes_added=true\nreview_state='+str(final_state)+'\nreview_submission_id='+str(submission_id)+'\n')
+          print('FINAL SUCCESS',final_state)
+          PY
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -ne 0 ]; then
+            { echo 'result=failure'; echo 'bundle=de.kamilunavo.ninenine'; echo 'build=16'; echo '--- last log lines ---'; tail -n 80 /tmp/submit.log; } > validation/appstore-final-submit-result.txt
+            echo 'result=failure' >> "$GITHUB_OUTPUT"
+          else
+            echo 'result=success' >> "$GITHUB_OUTPUT"
+          fi
+          exit 0
+
+      - name: Record final ASC result
+        if: always()
+        run: |
+          git config user.name 'Kamilunavo Release Bot'
+          git config user.email 'acciento89@gmail.com'
+          git add validation/appstore-final-submit-result.txt
+          if ! git diff --cached --quiet; then
+            git commit -m 'Record 99.9 final App Store submission result'
+            git push origin HEAD:ios/storekit-connection-fix
+          fi
+
+      - name: Fail if submission failed
+        if: steps.submit.outputs.result != 'success'
+        run: exit 1

@@ -1,0 +1,312 @@
+name: 99.9 App Store Submit
+
+on:
+  push:
+    branches:
+      - ios/storekit-connection-fix
+    paths:
+      - '.github/workflows/ios-appstore-submit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  BUNDLE_ID: de.kamilunavo.ninenine
+  BUILD_NUMBER: '16'
+  RELEASE_BRANCH: ios/storekit-connection-fix
+
+jobs:
+  submit:
+    name: Finalize App Store Connect and submit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
+    steps:
+      - name: Checkout 99-9
+        uses: actions/checkout@v5
+        with:
+          ref: ios/storekit-connection-fix
+
+      - name: Verify ASC credentials are available
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$ASC_KEY_ID"
+          test -n "$ASC_ISSUER_ID"
+          test -n "$ASC_PRIVATE_KEY_B64"
+
+      - name: Install App Store Connect API dependencies
+        shell: bash
+        run: python3 -m pip install --quiet pyjwt cryptography requests
+
+      - name: Enforce Apple EULA and submit Build 16
+        id: submit
+        shell: bash
+        run: |
+          set +e
+          mkdir -p validation
+          python3 - <<'PY' 2>&1 | tee /tmp/appstore-submit.log
+          import os, time, base64, json, sys
+          import jwt, requests
+
+          BASE = 'https://api.appstoreconnect.apple.com/v1'
+          EULA_URL = 'https://www.apple.com/legal/internet-services/itunes/dev/stdeula/'
+          EULA_LINE = 'Terms of Use (EULA): ' + EULA_URL
+          EULA_SUFFIX = '\n\n' + EULA_LINE
+          bundle_id = os.environ['BUNDLE_ID']
+          build_number = os.environ['BUILD_NUMBER']
+          key_id = os.environ['ASC_KEY_ID']
+          issuer_id = os.environ['ASC_ISSUER_ID']
+          private_key = base64.b64decode(os.environ['ASC_PRIVATE_KEY_B64']).decode('utf-8')
+
+          now = int(time.time())
+          token = jwt.encode(
+              {'iss': issuer_id, 'iat': now, 'exp': now + 1100, 'aud': 'appstoreconnect-v1'},
+              private_key,
+              algorithm='ES256',
+              headers={'kid': key_id, 'typ': 'JWT'},
+          )
+          headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+
+          def call(method, path, *, params=None, body=None, ok=(200,201,204)):
+              r = requests.request(method, BASE + path, headers=headers, params=params, json=body, timeout=45)
+              if r.status_code not in ok:
+                  print(f'ASC ERROR {method} {path}: HTTP {r.status_code}')
+                  try:
+                      print(json.dumps(r.json(), indent=2))
+                  except Exception:
+                      print(r.text)
+                  raise RuntimeError(f'ASC request failed: {method} {path} HTTP {r.status_code}')
+              if r.status_code == 204 or not r.content:
+                  return None
+              return r.json()
+
+          apps = call('GET', '/apps', params={'filter[bundleId]': bundle_id, 'limit': '5'})['data']
+          if len(apps) != 1:
+              raise RuntimeError(f'Expected exactly one app for {bundle_id}, found {len(apps)}')
+          app_id = apps[0]['id']
+          print(f'App found: {bundle_id} / {app_id}')
+
+          def get_version():
+              versions = call('GET', f'/apps/{app_id}/appStoreVersions', params={
+                  'filter[platform]': 'IOS',
+                  'limit': '50',
+                  'fields[appStoreVersions]': 'platform,versionString,appVersionState,releaseType,build'
+              })['data']
+              candidates = [v for v in versions if v.get('attributes', {}).get('versionString') in ('1.0', '1.0.0')]
+              if not candidates:
+                  raise RuntimeError('No iOS App Store version 1.0/1.0.0 exists in App Store Connect.')
+              editable_states = {'PREPARE_FOR_SUBMISSION','READY_FOR_REVIEW','DEVELOPER_REJECTED','METADATA_REJECTED','REJECTED'}
+              editable = [v for v in candidates if v.get('attributes',{}).get('appVersionState') in editable_states]
+              return editable[0] if editable else candidates[0]
+
+          version = get_version()
+          version_id = version['id']
+          state = version.get('attributes',{}).get('appVersionState')
+          print('Selected App Store version:', version.get('attributes',{}).get('versionString'), state, version_id)
+
+          def localizations():
+              return call('GET', f'/appStoreVersions/{version_id}/appStoreVersionLocalizations', params={
+                  'limit': '50',
+                  'fields[appStoreVersionLocalizations]': 'locale,description'
+              })['data']
+
+          locs = localizations()
+          if not locs:
+              raise RuntimeError('No App Store version localizations found.')
+
+          def all_eula_correct(rows):
+              return all((row.get('attributes',{}).get('description') or '').rstrip().endswith(EULA_LINE) for row in rows)
+
+          # If an earlier automated submit raced ahead without the EULA, cancel that exact version submission first.
+          if not all_eula_correct(locs) and state in {'WAITING_FOR_REVIEW','IN_REVIEW'}:
+              submissions = call('GET', f'/apps/{app_id}/reviewSubmissions', params={
+                  'limit': '100',
+                  'include': 'appStoreVersionForReview',
+                  'fields[reviewSubmissions]': 'platform,submittedDate,state,appStoreVersionForReview',
+                  'fields[appStoreVersions]': 'versionString,appVersionState'
+              })['data']
+              matching = []
+              for sub in submissions:
+                  sub_state = sub.get('attributes',{}).get('state')
+                  rel = sub.get('relationships',{}).get('appStoreVersionForReview',{}).get('data')
+                  if rel and rel.get('id') == version_id and sub_state in {'WAITING_FOR_REVIEW','IN_REVIEW'}:
+                      matching.append(sub)
+              for sub in matching:
+                  sid = sub['id']
+                  print('Canceling earlier submission so EULA can be corrected:', sid)
+                  call('PATCH', f'/reviewSubmissions/{sid}', body={
+                      'data': {
+                          'type': 'reviewSubmissions',
+                          'id': sid,
+                          'attributes': {'canceled': True}
+                      }
+                  })
+              if matching:
+                  for _ in range(18):
+                      time.sleep(5)
+                      version = get_version()
+                      state = version.get('attributes',{}).get('appVersionState')
+                      print('Waiting for editable version state:', state)
+                      if state in {'PREPARE_FOR_SUBMISSION','READY_FOR_REVIEW','DEVELOPER_REJECTED','METADATA_REJECTED','REJECTED'}:
+                          break
+                  else:
+                      raise RuntimeError('Version did not return to an editable state after canceling submission.')
+
+          # Append the Apple standard EULA as the final line of every localized App Store description.
+          for loc in localizations():
+              loc_id = loc['id']
+              locale = loc.get('attributes',{}).get('locale','unknown')
+              desc = loc.get('attributes',{}).get('description') or ''
+              if EULA_URL in desc:
+                  base = desc.split(EULA_URL, 1)[0]
+                  base = base.rsplit('Terms of Use (EULA):', 1)[0].rstrip()
+              else:
+                  base = desc.rstrip()
+              max_base = 4000 - len(EULA_SUFFIX)
+              new_desc = base[:max_base].rstrip() + EULA_SUFFIX
+              call('PATCH', f'/appStoreVersionLocalizations/{loc_id}', body={
+                  'data': {
+                      'type': 'appStoreVersionLocalizations',
+                      'id': loc_id,
+                      'attributes': {'description': new_desc}
+                  }
+              })
+              print(f'Apple EULA set at end of {locale} description.')
+
+          verified_locs = localizations()
+          if not all_eula_correct(verified_locs):
+              raise RuntimeError('EULA final-position verification failed.')
+          print('EULA final-position verification passed for all descriptions.')
+
+          builds = call('GET', '/builds', params={
+              'filter[app]': app_id,
+              'filter[version]': build_number,
+              'limit': '20',
+              'sort': '-uploadedDate',
+              'fields[builds]': 'version,uploadedDate,processingState,buildAudienceType,usesNonExemptEncryption'
+          })['data']
+          valid = [b for b in builds if b.get('attributes',{}).get('processingState') == 'VALID']
+          if not valid:
+              raise RuntimeError('Build 16 is not VALID/available in App Store Connect.')
+          build_id = valid[0]['id']
+          print('Build 16 VALID:', build_id)
+
+          call('PATCH', f'/appStoreVersions/{version_id}/relationships/build', body={
+              'data': {'type': 'builds', 'id': build_id}
+          }, ok=(204,))
+          print('Build 16 attached to App Store version.')
+
+          version = get_version()
+          state = version.get('attributes',{}).get('appVersionState')
+          if state in {'WAITING_FOR_REVIEW','IN_REVIEW'}:
+              print('Version is already correctly submitted:', state)
+              final_state = state
+              submission_id = 'existing'
+          else:
+              submissions = call('GET', f'/apps/{app_id}/reviewSubmissions', params={
+                  'filter[state]': 'READY_FOR_REVIEW',
+                  'limit': '100',
+                  'fields[reviewSubmissions]': 'platform,submittedDate,state'
+              })['data']
+              submission = submissions[0] if submissions else call('POST', '/reviewSubmissions', body={
+                  'data': {
+                      'type': 'reviewSubmissions',
+                      'attributes': {'platform': 'IOS'},
+                      'relationships': {'app': {'data': {'type': 'apps', 'id': app_id}}}
+                  }
+              })['data']
+              submission_id = submission['id']
+              print('Review submission:', submission_id)
+
+              items = call('GET', f'/reviewSubmissions/{submission_id}/items', params={
+                  'limit': '200',
+                  'include': 'appStoreVersion',
+                  'fields[reviewSubmissionItems]': 'state,appStoreVersion',
+                  'fields[appStoreVersions]': 'versionString,appVersionState'
+              })['data']
+              linked = any(
+                  item.get('relationships',{}).get('appStoreVersion',{}).get('data',{}).get('id') == version_id
+                  for item in items
+              )
+              if not linked:
+                  call('POST', '/reviewSubmissionItems', body={
+                      'data': {
+                          'type': 'reviewSubmissionItems',
+                          'relationships': {
+                              'reviewSubmission': {'data': {'type': 'reviewSubmissions', 'id': submission_id}},
+                              'appStoreVersion': {'data': {'type': 'appStoreVersions', 'id': version_id}}
+                          }
+                      }
+                  })
+                  print('App Store version added to review submission.')
+
+              result = call('PATCH', f'/reviewSubmissions/{submission_id}', body={
+                  'data': {
+                      'type': 'reviewSubmissions',
+                      'id': submission_id,
+                      'attributes': {'submitted': True}
+                  }
+              })['data']
+              final_state = result.get('attributes',{}).get('state')
+              print('Submit request accepted. Initial review state:', final_state)
+              for _ in range(12):
+                  if final_state in {'WAITING_FOR_REVIEW','IN_REVIEW'}:
+                      break
+                  time.sleep(5)
+                  result = call('GET', f'/reviewSubmissions/{submission_id}')['data']
+                  final_state = result.get('attributes',{}).get('state')
+                  print('Review state:', final_state)
+              if final_state not in {'WAITING_FOR_REVIEW','IN_REVIEW'}:
+                  raise RuntimeError(f'Submission did not reach WAITING_FOR_REVIEW/IN_REVIEW; state={final_state}')
+
+          result_path = os.path.join(os.environ['GITHUB_WORKSPACE'], 'validation', 'appstore-submit-result.txt')
+          os.makedirs(os.path.dirname(result_path), exist_ok=True)
+          with open(result_path, 'w', encoding='utf-8') as f:
+              f.write('result=success\n')
+              f.write(f'bundle={bundle_id}\n')
+              f.write(f'build={build_number}\n')
+              f.write('eula_at_description_end=true\n')
+              f.write(f'review_state={final_state}\n')
+              f.write(f'review_submission_id={submission_id}\n')
+          print('99.9 Build 16 is submitted to App Review with Apple EULA verified.')
+          PY
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -ne 0 ]; then
+            {
+              echo 'result=failure'
+              echo 'bundle=de.kamilunavo.ninenine'
+              echo 'build=16'
+              echo 'eula_at_description_end=unknown'
+              echo '--- last log lines ---'
+              tail -n 40 /tmp/appstore-submit.log
+            } > validation/appstore-submit-result.txt
+            echo 'result=failure' >> "$GITHUB_OUTPUT"
+          else
+            echo 'result=success' >> "$GITHUB_OUTPUT"
+          fi
+          exit 0
+
+      - name: Record App Store submission result
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Kamilunavo Release Bot'
+          git config user.email 'acciento89@gmail.com'
+          git add validation/appstore-submit-result.txt
+          if git diff --cached --quiet; then
+            echo 'Result file unchanged.'
+          else
+            git commit -m 'Record 99.9 Build 16 App Store submission result'
+            git push origin HEAD:ios/storekit-connection-fix
+          fi
+
+      - name: Fail workflow if App Store submission failed
+        if: steps.submit.outputs.result != 'success'
+        shell: bash
+        run: exit 1
