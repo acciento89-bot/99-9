@@ -1,0 +1,69 @@
+name: 99.9 Android Play Release
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "assets/**"
+      - "scenes/**"
+      - "scripts/**"
+      - "project.godot"
+      - "export_presets.cfg"
+      - ".github/workflows/android-play-release.yml"
+  push:
+    branches: [android/play-release]
+
+permissions:
+  contents: read
+
+env:
+  GODOT_VERSION: "4.7.2"
+  GODOT_TAG: "4.7.2-stable"
+
+jobs:
+  android-play:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+      - name: Install Godot Android toolchain
+        run: |
+          set -euo pipefail
+          bash scripts/ci_install_admob.sh android
+          curl -L --fail --retry 3 -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_linux.x86_64.zip"
+          unzip -q godot.zip
+          mv "Godot_v${GODOT_TAG}_linux.x86_64" godot
+          chmod +x godot
+          T="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$T" templates android/build build/android
+          curl -L --fail --retry 3 -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_export_templates.tpz"
+          unzip -q templates.tpz -d templates
+          cp -R templates/templates/. "$T/"
+          unzip -q "$T/android_source.zip" -d android/build
+          printf '%s\n' "${GODOT_VERSION}.stable" > android/.build_version
+          chmod +x android/build/gradlew
+          keytool -genkeypair -v -keystore ci-release.jks -storepass temporary-build-only -alias release -keypass temporary-build-only -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=CI Build, O=Kamilunavo, C=DE"
+      - name: Export release AAB
+        run: |
+          set -euo pipefail
+          ./godot --headless --editor --path . --quit
+          ./godot --headless --path . --export-release "Android Play Release" build/android/99-9.aab
+          test -s build/android/99-9.aab
+          unzip -l build/android/99-9.aab | grep -Ei "GodotIap|billing" >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 99-9-play-aab
+          path: build/android/99-9.aab
+          if-no-files-found: error
+          retention-days: 7
