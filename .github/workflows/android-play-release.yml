@@ -53,24 +53,33 @@ jobs:
           unzip -q "$T/android_source.zip" -d android/build
           printf '%s\n' "${GODOT_VERSION}.stable" > android/.build_version
           chmod +x android/build/gradlew
-          keytool -genkeypair -v -keystore ci-release.jks -storepass temporary-build-only -alias release -keypass temporary-build-only -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=CI Build, O=Kamilunavo, C=DE"
       - name: Export release AAB
+        env:
+          ANDROID_UPLOAD_KEYSTORE_BASE64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 }}
+          ANDROID_UPLOAD_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_PASSWORD }}
         run: |
           set -euo pipefail
+          printf '%s' "${ANDROID_UPLOAD_KEYSTORE_BASE64}" | base64 --decode > build/android/ninenine-upload.jks
           python3 - <<'PY'
           from pathlib import Path
           preset = Path("export_presets.cfg")
           text = preset.read_text()
           text = text.replace('export_path="build/android/99-9.apk"', 'export_path="build/android/99-9.aab"')
           text = text.replace('gradle_build/target_sdk="35"', 'gradle_build/target_sdk="36"')
-          text = text.replace(
-              'gradle_build/gradle_build_directory="android"',
-              'gradle_build/gradle_build_directory="android"\n'
-              'gradle_build/export_format=1\n'
-              'keystore/release="ci-release.jks"\n'
-              'keystore/release_user="release"\n'
-              'keystore/release_password="temporary-build-only"'
-          )
+          if 'gradle_build/export_format=1' not in text:
+              text = text.replace(
+                  'gradle_build/gradle_build_directory="android"',
+                  'gradle_build/gradle_build_directory="android"\n'
+                  'gradle_build/export_format=1'
+              )
+          if 'keystore/release=' not in text:
+              text = text.replace(
+                  'gradle_build/export_format=1',
+                  'gradle_build/export_format=1\n'
+                  'keystore/release="build/android/ninenine-upload.jks"\n'
+                  'keystore/release_user="upload"\n'
+                  f'keystore/release_password="{__import__("os").environ["ANDROID_UPLOAD_KEYSTORE_PASSWORD"]}"'
+              )
           preset.write_text(text)
           PY
           ./godot --headless --editor --path . --quit
