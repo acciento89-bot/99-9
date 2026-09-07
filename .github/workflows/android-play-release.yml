@@ -2,6 +2,14 @@ name: 99.9 Android Play Release
 
 on:
   workflow_dispatch:
+  push:
+    branches: [release/play-1.0.2-3]
+    paths:
+      - ".github/workflows/android-play-release.yml"
+      - "export_presets.cfg"
+      - "project.godot"
+      - "scripts/**"
+      - "addons/**"
 
 permissions:
   contents: write
