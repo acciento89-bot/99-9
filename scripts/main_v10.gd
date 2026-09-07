@@ -1,6 +1,6 @@
 extends "res://scripts/main_v9.gd"
 
-# Final iOS release pass: production AdMob + non-consumable Remove Ads.
+# Cross-platform release: AdMob + non-consumable Remove Ads.
 
 var remove_ads_owned := false
 var remove_ads_price := ""
@@ -33,7 +33,7 @@ func _build_settings_ui() -> void:
     remove_ads_button.disabled = true
     remove_ads_button.pressed.connect(_purchase_remove_ads)
 
-    remove_ads_status_label = _make_muted_label("Checking App Store ownership...", 18, HORIZONTAL_ALIGNMENT_LEFT)
+    remove_ads_status_label = _make_muted_label("Checking store ownership...", 18, HORIZONTAL_ALIGNMENT_LEFT)
     _place(remove_ads_status_label, Vector2(45, 148), Vector2(335, 78), panel)
     remove_ads_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 
@@ -41,7 +41,7 @@ func _purchase_remove_ads() -> void:
     if remove_ads_owned:
         return
     if not store_connected:
-        remove_ads_status_label.text = "APP STORE NOT READY"
+        remove_ads_status_label.text = "STORE NOT READY"
         return
     remove_ads_button.disabled = true
     remove_ads_button.text = "OPENING STORE..."
@@ -80,17 +80,17 @@ func _refresh_remove_ads_ui() -> void:
     if remove_ads_owned:
         remove_ads_button.text = "ADS REMOVED"
         remove_ads_button.disabled = true
-        remove_ads_status_label.text = "OWNED · RESTORES WITH YOUR APPLE ID"
+        remove_ads_status_label.text = "OWNED · RESTORES WITH YOUR STORE ACCOUNT"
         return
     if not store_connected:
         remove_ads_button.text = "CONNECTING..."
         remove_ads_button.disabled = true
-        remove_ads_status_label.text = "CONNECTING TO APP STORE"
+        remove_ads_status_label.text = "CONNECTING TO STORE"
         return
     if remove_ads_price.is_empty():
         remove_ads_button.text = "NOT AVAILABLE YET"
         remove_ads_button.disabled = true
-        remove_ads_status_label.text = "APP STORE ITEM IS STILL PROCESSING"
+        remove_ads_status_label.text = "STORE ITEM IS STILL PROCESSING"
         return
     remove_ads_button.text = "REMOVE ADS · %s" % remove_ads_price
     remove_ads_button.disabled = false
