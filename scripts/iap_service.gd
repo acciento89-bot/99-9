@@ -137,8 +137,8 @@ func purchase_theme(theme_id: String) -> void:
     _purchase_product(str(PRODUCT_BY_THEME[theme_id]))
 
 func purchase_remove_ads() -> void:
-    if OS.get_name() != "iOS":
-        purchase_failed.emit("Remove Ads is available on iOS")
+    if OS.get_name() not in ["iOS", "Android"]:
+        purchase_failed.emit("Remove Ads is available on iOS / Android")
         return
     _purchase_product(REMOVE_ADS_PRODUCT)
 
