@@ -2,6 +2,8 @@ name: 99.9 Android Play Release
 
 on:
   workflow_dispatch:
+  push:
+    branches: [release/play-icon-1.0.3-4]
 
 permissions:
   contents: write
@@ -16,6 +18,10 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
+      - name: Validate existing launcher and Store artwork
+        run: |
+          python3 -m pip install Pillow
+          python3 scripts/check_launcher_icons.py
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -85,8 +91,8 @@ jobs:
       - name: Publish transfer prerelease
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ninenine-play-1.0.2-3
-          name: 99.9% Play 1.0.2 (3)
+          tag_name: ninenine-play-1.0.3-4
+          name: 99.9% Play 1.0.3 (4)
           prerelease: true
           make_latest: false
           files: build/android/99-9.aab
