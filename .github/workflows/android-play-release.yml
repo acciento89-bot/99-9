@@ -14,10 +14,15 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 env:
   GODOT_VERSION: "4.7.2"
   GODOT_TAG: "4.7.2-stable"
+  PACKAGE_NAME: de.kamilunavo.ninenine
+  EXPECTED_VERSION_CODE: '4'
+  WIF_PROVIDER: projects/1058001477767/locations/global/workloadIdentityPools/github/providers/github-actions
+  GOOGLE_SERVICE_ACCOUNT: navoops@emerald-caster-508318-f2.iam.gserviceaccount.com
 
 jobs:
   android-play:
@@ -55,16 +60,13 @@ jobs:
           unzip -q "$T/android_source.zip" -d android/build
           printf '%s\n' "${GODOT_VERSION}.stable" > android/.build_version
           chmod +x android/build/gradlew
+      - name: Restore upload identity from KMS vault
+        uses: acciento89-bot/maengelfix/.github/actions/restore-android-signing@main
+        with: {app-id: ninenine}
       - name: Export signed release AAB
-        env:
-          ANDROID_UPLOAD_KEYSTORE_BASE64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 }}
-          ANDROID_UPLOAD_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_PASSWORD }}
         run: |
           set -euo pipefail
-          test -n "$ANDROID_UPLOAD_KEYSTORE_BASE64"
-          test -n "$ANDROID_UPLOAD_KEYSTORE_PASSWORD"
-          printf '%s' "$ANDROID_UPLOAD_KEYSTORE_BASE64" | base64 --decode > build/android/ninenine-upload.jks
-          chmod 600 build/android/ninenine-upload.jks
+          mkdir -p build/android
           python3 - <<'PY'
           from pathlib import Path
           import os
@@ -74,21 +76,50 @@ jobs:
           text = text.replace('gradle_build/target_sdk="35"', 'gradle_build/target_sdk="36"')
           if 'gradle_build/export_format=1' not in text:
               text = text.replace('gradle_build/gradle_build_directory="android"', 'gradle_build/gradle_build_directory="android"\ngradle_build/export_format=1')
-          if 'keystore/release=' not in text:
-              text = text.replace(
-                  'gradle_build/export_format=1',
-                  'gradle_build/export_format=1\nkeystore/release="build/android/ninenine-upload.jks"\nkeystore/release_user="upload"\nkeystore/release_password="' + os.environ['ANDROID_UPLOAD_KEYSTORE_PASSWORD'] + '"'
-              )
+          lines = [line for line in text.splitlines() if not line.startswith('keystore/release=') and not line.startswith('keystore/release_user=') and not line.startswith('keystore/release_password=')]
+          text = '\n'.join(lines) + '\n'
+          anchor = 'gradle_build/export_format=1'
+          signing = '\n'.join([
+              'keystore/release="' + os.environ['ANDROID_UPLOAD_KEYSTORE_PATH'] + '"',
+              'keystore/release_user="' + os.environ['ANDROID_UPLOAD_KEY_ALIAS'] + '"',
+              'keystore/release_password="' + os.environ['ANDROID_UPLOAD_KEY_PASSWORD'] + '"',
+          ])
+          text = text.replace(anchor, anchor + '\n' + signing)
           preset.write_text(text)
           PY
           ./godot --headless --editor --path . --quit
           ./godot --headless --path . --export-release "Android Playtest" build/android/99-9.aab
           test -s build/android/99-9.aab
           unzip -l build/android/99-9.aab | grep -Ei "GodotIap|billing" >/dev/null
-          rm -f build/android/ninenine-upload.jks
+          jarsigner -verify build/android/99-9.aab | grep -Fq 'jar verified.'
+          echo "AAB_PATH=$GITHUB_WORKSPACE/build/android/99-9.aab" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@v4
         with:
           name: 99-9-play-1.0.3-4-signed-aab
           path: build/android/99-9.aab
           if-no-files-found: error
           retention-days: 30
+      - id: google-auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.GOOGLE_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/androidpublisher
+      - name: Verify current bundle is present in Google Play
+        env: {TOKEN: '${{ steps.google-auth.outputs.access_token }}'}
+        shell: bash
+        run: |
+          set -euo pipefail
+          api='https://androidpublisher.googleapis.com/androidpublisher/v3'
+          edit=$(curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{}' "$api/applications/$PACKAGE_NAME/edits" | jq -r '.id')
+          bundles=$(curl -fsS -H "Authorization: Bearer $TOKEN" "$api/applications/$PACKAGE_NAME/edits/$edit/bundles")
+          jq -e --argjson code "$EXPECTED_VERSION_CODE" '.bundles | any(.versionCode == $code)' <<<"$bundles" >/dev/null
+          curl -fsS -X DELETE -H "Authorization: Bearer $TOKEN" "$api/applications/$PACKAGE_NAME/edits/$edit" >/dev/null
+          echo "$PACKAGE_NAME versionCode $EXPECTED_VERSION_CODE is present in Google Play"
+      - name: Destroy restored signing material
+        if: always()
+        shell: bash
+        run: |
+          rm -f "$RUNNER_TEMP/kamilunavo-upload.jks"
+          rm -rf "$RUNNER_TEMP/kamilunavo-signing-vault"
