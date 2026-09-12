@@ -3,10 +3,17 @@ name: 99.9 Android Play Release
 on:
   workflow_dispatch:
   push:
-    branches: [release/play-icon-1.0.3-4]
+    branches: [main]
+    paths:
+      - '.github/workflows/android-play-release.yml'
+      - 'assets/icon.svg'
+      - 'assets/android/**'
+      - 'store/google-play/**'
+      - 'scripts/check_launcher_icons.py'
+      - 'scripts/export_launcher_icons.py'
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   GODOT_VERSION: "4.7.2"
@@ -18,7 +25,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
-      - name: Validate existing launcher and Store artwork
+      - name: Validate identical launcher and Store artwork
         run: |
           python3 -m pip install Pillow
           python3 scripts/check_launcher_icons.py
@@ -48,33 +55,29 @@ jobs:
           unzip -q "$T/android_source.zip" -d android/build
           printf '%s\n' "${GODOT_VERSION}.stable" > android/.build_version
           chmod +x android/build/gradlew
-      - name: Export release AAB
+      - name: Export signed release AAB
         env:
           ANDROID_UPLOAD_KEYSTORE_BASE64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 }}
           ANDROID_UPLOAD_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_PASSWORD }}
         run: |
           set -euo pipefail
-          printf '%s' "${ANDROID_UPLOAD_KEYSTORE_BASE64}" | base64 --decode > build/android/ninenine-upload.jks
+          test -n "$ANDROID_UPLOAD_KEYSTORE_BASE64"
+          test -n "$ANDROID_UPLOAD_KEYSTORE_PASSWORD"
+          printf '%s' "$ANDROID_UPLOAD_KEYSTORE_BASE64" | base64 --decode > build/android/ninenine-upload.jks
+          chmod 600 build/android/ninenine-upload.jks
           python3 - <<'PY'
           from pathlib import Path
           import os
-          preset = Path("export_presets.cfg")
+          preset = Path('export_presets.cfg')
           text = preset.read_text()
           text = text.replace('export_path="build/android/99-9.apk"', 'export_path="build/android/99-9.aab"')
           text = text.replace('gradle_build/target_sdk="35"', 'gradle_build/target_sdk="36"')
           if 'gradle_build/export_format=1' not in text:
-              text = text.replace(
-                  'gradle_build/gradle_build_directory="android"',
-                  'gradle_build/gradle_build_directory="android"\n'
-                  'gradle_build/export_format=1'
-              )
+              text = text.replace('gradle_build/gradle_build_directory="android"', 'gradle_build/gradle_build_directory="android"\ngradle_build/export_format=1')
           if 'keystore/release=' not in text:
               text = text.replace(
                   'gradle_build/export_format=1',
-                  'gradle_build/export_format=1\n'
-                  'keystore/release="build/android/ninenine-upload.jks"\n'
-                  'keystore/release_user="upload"\n'
-                  f'keystore/release_password="{os.environ["ANDROID_UPLOAD_KEYSTORE_PASSWORD"]}"'
+                  'gradle_build/export_format=1\nkeystore/release="build/android/ninenine-upload.jks"\nkeystore/release_user="upload"\nkeystore/release_password="' + os.environ['ANDROID_UPLOAD_KEYSTORE_PASSWORD'] + '"'
               )
           preset.write_text(text)
           PY
@@ -82,17 +85,10 @@ jobs:
           ./godot --headless --path . --export-release "Android Playtest" build/android/99-9.aab
           test -s build/android/99-9.aab
           unzip -l build/android/99-9.aab | grep -Ei "GodotIap|billing" >/dev/null
+          rm -f build/android/ninenine-upload.jks
       - uses: actions/upload-artifact@v4
         with:
-          name: 99-9-play-aab
+          name: 99-9-play-1.0.3-4-signed-aab
           path: build/android/99-9.aab
           if-no-files-found: error
-          retention-days: 7
-      - name: Publish transfer prerelease
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ninenine-play-1.0.3-4
-          name: 99.9% Play 1.0.3 (4)
-          prerelease: true
-          make_latest: false
-          files: build/android/99-9.aab
+          retention-days: 30
