@@ -1,0 +1,97 @@
+name: 99.9 Android Store Screenshots
+
+on:
+  pull_request:
+    paths:
+      - 'project.godot'
+      - 'export_presets.cfg'
+      - 'scenes/**'
+      - 'scripts/**'
+      - 'assets/**'
+      - 'addons/**'
+      - '.github/scripts/capture-android-store-screenshots.sh'
+      - '.github/workflows/android-store-screenshots.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'project.godot'
+      - 'export_presets.cfg'
+      - 'scenes/**'
+      - 'scripts/**'
+      - 'assets/**'
+      - 'addons/**'
+      - '.github/scripts/capture-android-store-screenshots.sh'
+      - '.github/workflows/android-store-screenshots.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GODOT_VERSION: '4.7.2'
+  GODOT_TAG: '4.7.2-stable'
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Godot, Android template and app plugins
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
+          mkdir -p "$HOME/.android"
+          keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Android Debug,O=Android,C=US' || true
+          bash scripts/ci_install_admob.sh android
+          curl -L --fail --retry 3 -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_linux.x86_64.zip"
+          unzip -q godot.zip
+          mv "Godot_v${GODOT_TAG}_linux.x86_64" godot
+          chmod +x godot
+          template_dir="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$template_dir" templates
+          curl -L --fail --retry 3 -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_export_templates.tpz"
+          unzip -q templates.tpz -d templates
+          cp -R templates/templates/. "$template_dir/"
+          ./godot --headless --editor --path . --quit
+          rm -rf android/build
+          mkdir -p android/build
+          unzip -q "$template_dir/android_source.zip" -d android/build
+          printf '%s\n' "${GODOT_VERSION}.stable" > android/.build_version
+          chmod +x android/build/gradlew
+      - name: Export installable x86_64 screenshot APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -i 's#gradle_build/export_format=1#gradle_build/export_format=0#' export_presets.cfg
+          sed -i 's#architectures/arm64-v8a=true#architectures/arm64-v8a=false#' export_presets.cfg
+          sed -i 's#architectures/x86_64=false#architectures/x86_64=true#' export_presets.cfg
+          mkdir -p build/android
+          ./godot --headless --path . --export-debug 'Android Playtest' build/android/99-9.apk
+          test -s build/android/99-9.apk
+      - name: Enable KVM acceleration
+        run: |
+          test -c /dev/kvm
+          sudo chmod 666 /dev/kvm
+      - name: Capture real game UI
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_7
+          disable-animations: true
+          emulator-options: -no-window -gpu swangle -noaudio -no-boot-anim
+          script: PACKAGE_NAME='de.kamilunavo.ninenine' APK_PATH='build/android/99-9.apk' OUTPUT_DIR='store/google-play/screenshots/de-DE' SECOND_ACTION='tap' TAP_X='540' TAP_Y='1050' bash "$GITHUB_WORKSPACE/.github/scripts/capture-android-store-screenshots.sh"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 99-9-authentic-Android-store-screenshots
+          path: store/google-play/screenshots/de-DE/*.png
+          if-no-files-found: error
+          retention-days: 30
