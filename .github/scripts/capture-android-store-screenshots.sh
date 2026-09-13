@@ -12,7 +12,7 @@ readonly output_dir="$GITHUB_WORKSPACE/$OUTPUT_DIR"
 current_focus() {
   local dump
   local line
-  dump="$(adb shell dumpsys window windows)"
+  dump="$(adb shell dumpsys window)"
   while IFS= read -r line; do
     if [[ "$line" == *"mCurrentFocus="* ]]; then
       printf '%s\n' "$line"
