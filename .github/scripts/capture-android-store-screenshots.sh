@@ -43,6 +43,11 @@ wait_for_foreground() {
   done
   echo "Timed out waiting for $PACKAGE_NAME to become the foreground game." >&2
   current_focus >&2
+  echo "Package process and historical exit information:" >&2
+  adb shell pidof "$PACKAGE_NAME" >&2 || true
+  adb shell dumpsys activity exit-info "$PACKAGE_NAME" >&2 || true
+  echo "Godot, activity-manager and runtime logs:" >&2
+  adb logcat -d -v brief 'Godot:*' 'godot:*' 'ActivityManager:*' 'AndroidRuntime:*' '*:S' >&2 || true
   return 1
 }
 
