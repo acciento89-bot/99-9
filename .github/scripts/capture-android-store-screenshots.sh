@@ -122,7 +122,7 @@ esac
 assert_clean_foreground
 adb exec-out screencap -p > "$output_dir/02-current-ui-detail.png"
 
-python3 - "$output_dir" <<'PY'
+if ! python3 - "$output_dir" <<'PY'
 import hashlib
 import math
 import struct
@@ -202,3 +202,8 @@ for path in paths:
     digests.add(hashlib.sha256(data).hexdigest())
 assert len(digests) == 2, 'Screenshots must show two distinct real game states'
 PY
+then
+  echo "Screenshot validation failed; dumping Godot and Android runtime logs." >&2
+  adb logcat -d -v brief 'Godot:*' 'godot:*' 'AndroidRuntime:E' '*:S' >&2 || true
+  exit 1
+fi
