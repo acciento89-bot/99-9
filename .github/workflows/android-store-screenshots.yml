@@ -76,6 +76,10 @@ jobs:
           mkdir -p build/android
           ./godot --headless --path . --export-debug 'Android Playtest' build/android/99-9.apk
           test -s build/android/99-9.apk
+      - name: Enable KVM acceleration
+        run: |
+          test -c /dev/kvm
+          sudo chmod 666 /dev/kvm
       - name: Capture real game UI
         uses: reactivecircus/android-emulator-runner@v2
         with:
