@@ -96,7 +96,7 @@ jobs:
           chmod +x addons/godot-iap/scripts/fix_ios_embed.sh
           IOS_EXPORT_DIR="$PWD/build/ios" ./addons/godot-iap/scripts/fix_ios_embed.sh
           grep -q 'GodotIap.framework' build/ios/NineNine.xcodeproj/project.pbxproj
-          grep -R -q 'ca-app-pub-3940256099942544~1458002511' build/ios || { echo 'AdMob iOS demo App ID missing from export'; exit 1; }
+          grep -R -q 'ca-app-pub-8944085355624754~5700066119' build/ios || { echo 'Configured 99.9 iOS AdMob App ID missing from export'; exit 1; }
           grep -R -q 'GoogleMobileAds' build/ios || { echo 'Google Mobile Ads SPM integration missing'; exit 1; }
           xcodebuild -project build/ios/NineNine.xcodeproj -list -json > "$RUNNER_TEMP/xcode.json"
           SCHEME=$(python3 - <<'PY2'
@@ -120,7 +120,7 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -159,19 +159,19 @@ jobs:
           test -f android/build/build.gradle || test -f android/build/build.gradle.kts
           test -f android/build/gradlew
           chmod +x android/build/gradlew
-      - name: Export Android debug APK with Billing + AdMob
+      - name: Export Android debug AAB with Billing + AdMob
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p build/android
-          ./godot --headless --path . --export-debug "Android Playtest" build/android/99-9.apk
-          test -s build/android/99-9.apk
-          unzip -l build/android/99-9.apk | grep -Ei 'GodotIap|billing' >/dev/null || { echo 'IAP/Billing payload missing from APK'; exit 1; }
-          unzip -p build/android/99-9.apk AndroidManifest.xml | strings | grep -F 'ca-app-pub-3940256099942544~3347511713' >/dev/null || { echo 'AdMob Android demo App ID missing from manifest'; exit 1; }
-          unzip -p build/android/99-9.apk 'classes*.dex' | strings | grep -Em1 'com/google/android/gms/ads|MobileAds' >/dev/null || { echo 'Google Mobile Ads classes missing from APK'; exit 1; }
+          ./godot --headless --path . --export-debug "Android Playtest" build/android/99-9.aab
+          test -s build/android/99-9.aab
+          unzip -l build/android/99-9.aab | grep -Ei 'GodotIap|billing' >/dev/null || { echo 'IAP/Billing payload missing from AAB'; exit 1; }
+          unzip -p build/android/99-9.aab base/manifest/AndroidManifest.xml | strings | grep -F 'ca-app-pub-3940256099942544~3347511713' >/dev/null || { echo 'AdMob Android demo App ID missing from manifest'; exit 1; }
+          unzip -p build/android/99-9.aab 'base/dex/classes*.dex' | strings | grep -Em1 'com/google/android/gms/ads|MobileAds' >/dev/null || { echo 'Google Mobile Ads classes missing from AAB'; exit 1; }
       - uses: actions/upload-artifact@v4
         with:
           name: 99-9-android-debug
-          path: build/android/99-9.apk
+          path: build/android/99-9.aab
           if-no-files-found: error
           retention-days: 14
