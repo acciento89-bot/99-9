@@ -103,7 +103,11 @@ adb exec-out screencap -p > "$output_dir/01-current-ui.png"
 case "$SECOND_ACTION" in
   tap)
     adb shell input tap "${TAP_X:-540}" "${TAP_Y:-1900}"
-    sleep 4
+    sleep 2
+    adb shell input tap 540 1200
+    sleep 1
+    adb shell input tap 540 1200
+    sleep 3
     ;;
   swipe)
     adb shell input swipe 540 1900 540 650 600
