@@ -30,6 +30,9 @@ wait_for_foreground() {
     if [[ "$focus" == *"$PACKAGE_NAME"* ]]; then
       return 0
     fi
+    if [[ "$focus" == *"ImmersiveModeConfirmation"* ]]; then
+      adb shell input keyevent 4
+    fi
     sleep 1
   done
   echo "Timed out waiting for $PACKAGE_NAME to become the foreground game." >&2
@@ -83,6 +86,7 @@ rm -f "$output_dir"/*.png
 test -s "$apk_path"
 adb install -r "$apk_path"
 adb shell settings put global hide_error_dialogs 1
+adb shell settings put secure immersive_mode_confirmations confirmed
 adb shell settings put system accelerometer_rotation 0
 adb shell settings put system user_rotation 0
 
