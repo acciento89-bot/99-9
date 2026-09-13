@@ -1,0 +1,32 @@
+name: 99.9 Android icon parity PR
+
+on:
+  pull_request:
+    paths:
+      - 'assets/icon.svg'
+      - 'assets/icon.png'
+      - 'assets/android/**'
+      - 'export_presets.cfg'
+      - 'scripts/check_launcher_icons.py'
+      - 'scripts/export_launcher_icons.py'
+      - 'store/google-play/**'
+      - '.github/workflows/icon-parity-pr.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with: {persist-credentials: false}
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.13'}
+      - name: Verify iOS, Android and Play icon contract
+        run: |
+          python3 -m pip install Pillow
+          python3 scripts/check_launcher_icons.py
+          test ! -d assets/android
+          ! grep -Fq 'launcher_icons/adaptive_' export_presets.cfg
