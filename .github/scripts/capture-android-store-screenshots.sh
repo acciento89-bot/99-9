@@ -24,6 +24,7 @@ current_focus() {
 
 wait_for_foreground() {
   local attempt
+  local component
   local focus
   for attempt in $(seq 1 45); do
     focus="$(current_focus)"
@@ -34,7 +35,9 @@ wait_for_foreground() {
       adb shell input keyevent 4
     fi
     if [[ "$focus" == *"Application Not Responding: com.android.launcher3"* ]]; then
-      adb shell input keyevent 4
+      adb shell am force-stop com.android.launcher3
+      component="$(resolve_launcher_component)"
+      adb shell am start -W -n "$component"
     fi
     sleep 1
   done
