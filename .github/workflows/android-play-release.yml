@@ -7,7 +7,8 @@ on:
     paths:
       - '.github/workflows/android-play-release.yml'
       - 'assets/icon.svg'
-      - 'assets/android/**'
+      - 'assets/icon.png'
+      - 'export_presets.cfg'
       - 'store/google-play/**'
       - 'scripts/check_launcher_icons.py'
       - 'scripts/export_launcher_icons.py'
