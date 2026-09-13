@@ -87,7 +87,7 @@ jobs:
           arch: x86_64
           profile: pixel_7
           disable-animations: true
-          emulator-options: -no-window -gpu swiftshader -noaudio -no-boot-anim
+          emulator-options: -no-window -gpu swangle -noaudio -no-boot-anim
           script: PACKAGE_NAME='de.kamilunavo.ninenine' APK_PATH='build/android/99-9.apk' OUTPUT_DIR='store/google-play/screenshots/de-DE' SECOND_ACTION='tap' TAP_X='540' TAP_Y='1050' bash "$GITHUB_WORKSPACE/.github/scripts/capture-android-store-screenshots.sh"
       - uses: actions/upload-artifact@v4
         with:
