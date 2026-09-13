@@ -37,9 +37,33 @@ wait_for_foreground() {
   return 1
 }
 
+resolve_launcher_component() {
+  local output
+  local line
+  local component=""
+  output="$(adb shell cmd package resolve-activity --brief \
+    -a android.intent.action.MAIN \
+    -c android.intent.category.LAUNCHER \
+    "$PACKAGE_NAME")"
+  while IFS= read -r line; do
+    line="${line%$'\r'}"
+    if [[ "$line" == "$PACKAGE_NAME/"* ]]; then
+      component="$line"
+    fi
+  done <<< "$output"
+  if [[ -z "$component" ]]; then
+    echo "Could not resolve exported MAIN/LAUNCHER activity for $PACKAGE_NAME." >&2
+    printf '%s\n' "$output" >&2
+    return 1
+  fi
+  printf '%s\n' "$component"
+}
+
 launch_app() {
+  local component
+  component="$(resolve_launcher_component)"
   adb shell am force-stop "$PACKAGE_NAME"
-  adb shell am start -W -n "$PACKAGE_NAME/com.godot.game.GodotApp"
+  adb shell am start -W -n "$component"
   wait_for_foreground
   sleep 8
 }
