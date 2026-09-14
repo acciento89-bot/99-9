@@ -1,0 +1,177 @@
+name: Android central-signed bundle
+'on':
+  workflow_dispatch: null
+  push:
+    branches:
+    - main
+    paths:
+    - .github/workflows/android-central-bundle.yml
+permissions:
+  contents: read
+concurrency:
+  group: android-central-bundle
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main' && github.repository == 'acciento89-bot/99-9'
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    permissions:
+      contents: read
+      actions: read
+    env:
+      APP_ID: 99-9
+      PACKAGE_NAME: de.kamilunavo.ninenine
+      EXPECTED_VERSION_CODE: '5'
+      GODOT_VERSION: 4.7.2
+      GODOT_TAG: 4.7.2-stable
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        persist-credentials: false
+        ref: ${{ github.sha }}
+    - uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: '17'
+    - name: Validate identical launcher and Store artwork
+      run: |
+        python3 -m pip install Pillow
+        python3 scripts/check_launcher_icons.py
+    - uses: android-actions/setup-android@v3
+    - name: Install Android SDK
+      run: |
+        set -euo pipefail
+        yes | sdkmanager --licenses >/dev/null || true
+        sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+    - name: Install Godot Android toolchain
+      run: |
+        set -euo pipefail
+        bash scripts/ci_install_admob.sh android
+        curl -L --fail --retry 3 -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_linux.x86_64.zip"
+        unzip -q godot.zip
+        mv "Godot_v${GODOT_TAG}_linux.x86_64" godot
+        chmod +x godot
+        T="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+        mkdir -p "$T" templates android/build build/android
+        curl -L --fail --retry 3 -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_export_templates.tpz"
+        unzip -q templates.tpz -d templates
+        cp -R templates/templates/. "$T/"
+        unzip -q "$T/android_source.zip" -d android/build
+        printf '%s\n' "${GODOT_VERSION}.stable" > android/.build_version
+        chmod +x android/build/gradlew
+    - name: Export release AAB with temporary build-only identity
+      run: |-
+        set -euo pipefail
+        keytool -genkeypair -keystore "$RUNNER_TEMP/build-only.p12" -storetype PKCS12 -storepass build-only-password -keypass build-only-password -alias build-only -keyalg RSA -keysize 2048 -validity 1 -dname 'CN=Temporary Build Only'
+        python3 - <<'PY'
+        from pathlib import Path
+        import os
+        p=Path('export_presets.cfg'); s=p.read_text()
+        assert s.count('version/code=4')==1
+        s=s.replace('version/code=4','version/code=5')
+        lines=[l for l in s.splitlines() if not l.startswith(('keystore/release=','keystore/release_user=','keystore/release_password='))]
+        s='\n'.join(lines)+'\n'
+        anchor='gradle_build/export_format=1'
+        assert s.count(anchor)==1
+        s=s.replace(anchor,anchor+'\nkeystore/release="'+os.environ['RUNNER_TEMP']+'/build-only.p12"\nkeystore/release_user="build-only"\nkeystore/release_password="build-only-password"')
+        p.write_text(s)
+        PY
+        ./godot --headless --editor --path . --quit
+        ./godot --headless --path . --export-release "Android Playtest" build/android/99-9.aab
+        test -s build/android/99-9.aab
+        unzip -l build/android/99-9.aab | grep -Ei 'GodotIap|billing' >/dev/null
+        rm -f "$RUNNER_TEMP/build-only.p12"
+    - name: Stage bundle for isolated signing
+      run: |-
+        set -euo pipefail
+        AAB="build/android/99-9.aab"
+        test -s "$AAB"
+        mkdir -p unsigned
+        cp "$AAB" unsigned/app.aab
+        printf '%s\n' "$GITHUB_SHA" > unsigned/source-commit.txt
+    - uses: actions/upload-artifact@v4
+      with:
+        name: central-input-99-9-${{ github.run_id }}
+        path: unsigned/
+        if-no-files-found: error
+        retention-days: 1
+  sign:
+    if: github.ref == 'refs/heads/main' && github.repository == 'acciento89-bot/99-9'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      APP_ID: 99-9
+      PACKAGE_NAME: de.kamilunavo.ninenine
+      EXPECTED_VERSION_CODE: '5'
+    steps:
+    - uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: '17'
+    - uses: actions/download-artifact@v4
+      with:
+        name: central-input-99-9-${{ github.run_id }}
+        path: input
+    - name: Validate bundle identity before restoring signing material
+      run: |-
+        set -euo pipefail
+        test "$(cat input/source-commit.txt)" = "$GITHUB_SHA"
+        test -s input/app.aab
+        curl -fsSL --retry 3 https://github.com/google/bundletool/releases/download/1.18.3/bundletool-all-1.18.3.jar -o "$RUNNER_TEMP/bundletool.jar"
+        java -jar "$RUNNER_TEMP/bundletool.jar" validate --bundle=input/app.aab
+        package=$(java -jar "$RUNNER_TEMP/bundletool.jar" dump manifest --bundle=input/app.aab --xpath='/manifest/@package')
+        code=$(java -jar "$RUNNER_TEMP/bundletool.jar" dump manifest --bundle=input/app.aab --xpath='/manifest/@android:versionCode')
+        test "$package" = "$PACKAGE_NAME"
+        test "$code" = "$EXPECTED_VERSION_CODE"
+        mkdir -p signed
+        python3 - <<'PY'
+        import zipfile
+        with zipfile.ZipFile('input/app.aab') as src, zipfile.ZipFile('signed/app.aab','w') as out:
+            names=src.namelist()
+            assert len(names)==len(set(names)), 'Duplicate ZIP entries'
+            for item in src.infolist():
+                upper=item.filename.upper()
+                leaf=upper.removeprefix('META-INF/')
+                if upper.startswith('META-INF/') and '/' not in leaf and (leaf=='MANIFEST.MF' or leaf.endswith(('.SF','.RSA','.DSA','.EC')) or leaf.startswith('SIG-')):
+                    continue
+                out.writestr(item,src.read(item))
+        PY
+    - name: Restore verified central upload identity
+      uses: acciento89-bot/maengelfix/.github/actions/restore-central-android-signing@main
+    - name: Sign and independently verify central release bundle
+      run: |-
+        set -euo pipefail
+        expected='BCF2337D41E617C03BCAE698C09D1523654BD790'
+        test "$KAMILUNAVO_CENTRAL_UPLOAD_SHA1" = "$expected"
+        jarsigner -keystore "$ANDROID_UPLOAD_KEYSTORE_PATH" -storetype PKCS12 -storepass:env ANDROID_UPLOAD_KEYSTORE_PASSWORD -keypass:env ANDROID_UPLOAD_KEY_PASSWORD -sigalg SHA256withRSA -digestalg SHA-256 signed/app.aab "$ANDROID_UPLOAD_KEY_ALIAS"
+        jarsigner -verify signed/app.aab > "$RUNNER_TEMP/verification.txt"
+        grep -Fq 'jar verified.' "$RUNNER_TEMP/verification.txt"
+        keytool -J-Duser.language=en -printcert -jarfile signed/app.aab > "$RUNNER_TEMP/certificate.txt"
+        actual=$(sed -n 's/^[[:space:]]*SHA1: //p' "$RUNNER_TEMP/certificate.txt" | tr -d ':\r\n ')
+        test "$actual" = "$expected"
+        java -jar "$RUNNER_TEMP/bundletool.jar" validate --bundle=signed/app.aab
+        test "$(java -jar "$RUNNER_TEMP/bundletool.jar" dump manifest --bundle=signed/app.aab --xpath='/manifest/@package')" = "$PACKAGE_NAME"
+        test "$(java -jar "$RUNNER_TEMP/bundletool.jar" dump manifest --bundle=signed/app.aab --xpath='/manifest/@android:versionCode')" = "$EXPECTED_VERSION_CODE"
+        filename="$APP_ID-v$EXPECTED_VERSION_CODE-central.aab"
+        mv signed/app.aab "signed/$filename"
+        (cd signed && sha256sum "$filename" > "$filename.sha256")
+        jq -n --arg package "$PACKAGE_NAME" --argjson versionCode "$EXPECTED_VERSION_CODE" --arg certificateSha1 "$actual" --arg sourceCommit "$GITHUB_SHA" --arg runId "$GITHUB_RUN_ID" '{package:$package,versionCode:$versionCode,certificateSha1:$certificateSha1,sourceCommit:$sourceCommit,runId:$runId}' > signed/release-evidence.json
+        printf '%s versionCode %s central-signed and verified. No Play changes.\n' "$PACKAGE_NAME" "$EXPECTED_VERSION_CODE" >> "$GITHUB_STEP_SUMMARY"
+    - name: Destroy restored signing material
+      if: always()
+      run: |-
+        rm -f "$RUNNER_TEMP/kamilunavo-central-upload.p12"
+        rm -rf "$RUNNER_TEMP/kamilunavo-central-signing"
+    - name: Preserve verified release bundle
+      uses: actions/upload-artifact@v4
+      with:
+        name: 99-9-v5-central-signed-aab
+        path: signed/
+        if-no-files-found: error
+        retention-days: 30
