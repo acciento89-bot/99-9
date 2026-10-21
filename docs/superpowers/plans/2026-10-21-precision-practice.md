@@ -1,0 +1,9 @@
+# Precision Practice implementation plan
+Required skills: brainstorming, writing-plans, executing-plans, TDD, verification-before-completion; inline work, no children. Routine design human approved. Root executes every Godot/compiler/runtime/native operation.
+
+1. Source audit/identity: fresh isolated9429719, active v10 inheritance, real classic meter/providers/save/CI. Apple rejected protected, Google production observed. Document stale README/version4.7.2 mismatches; no changes to workflows/providers/old saves.
+2. FIRST deterministic pure tests + minimal staged harness. Root official4.7.1 copies only tests and future model into temporary empty project (no main/plugins/autoload/network). Observe missing-model RED before production.
+3. Minimum pure target/direction/signed-error clock and12attempt/8hit separate progress model; immutable bounded dictionaries and exact callback retry guards. Root GREEN before native UI integration.
+4. FIRST archive tests for real temp path/strict schema/corrupt/future/oversize/revision/conflict/failure/receipt and exact legacy sibling sentinel. Root RED then codec/atomic adapter; root GREEN. Do not claim fixture IO as actual Godot codec proof unless exact actual production codec used.
+5. Extend v10 narrowly with independent practice panel and processing/input; old classic calls/providers untouched. Save-before-publish, explicit pause/manual resume/cold held phase, transition/provider callback guards, DEEN and native safe-area responsive Controls. Root staged whole-source parse/compiler and actual app/headless/core gates; no worker execution.
+6. Independent source review, root actual Android/native/Duo/legacy/provider boundary acceptance without transactions; truthful Google metadata/native QA/handoff and local commit only after root verification. No push/version/store/Apple review.
