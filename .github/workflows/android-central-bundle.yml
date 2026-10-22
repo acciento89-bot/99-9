@@ -35,6 +35,8 @@ jobs:
         python3 -m pip install Pillow
         python3 scripts/check_launcher_icons.py
     - uses: android-actions/setup-android@v3
+      with:
+        packages: platform-tools
     - name: Install Android SDK
       run: |
         set -euo pipefail
