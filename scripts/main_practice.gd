@@ -2,6 +2,47 @@ extends "res://scripts/main_v10.gd"
 const Practice = preload("res://scripts/practice_model.gd")
 const PracticeArchive = preload("res://scripts/practice_archive.gd")
 
+# ScrollContainer uses mouse drags internally. This app deliberately disables
+# touch-to-mouse emulation to avoid duplicate timing inputs in Classic mode.
+class PracticeTouchScroll extends ScrollContainer:
+    var finger := -1
+    var origin := Vector2.ZERO
+    var initial_scroll := 0
+    var scrolling := false
+
+    func _notification(what: int) -> void:
+        if what == NOTIFICATION_APPLICATION_FOCUS_OUT or what == NOTIFICATION_APPLICATION_PAUSED or (what == NOTIFICATION_VISIBILITY_CHANGED and not is_visible_in_tree()):
+            finger = -1
+            # Also cancel a pressed child when Android loses the release.
+            propagate_notification(Control.NOTIFICATION_SCROLL_BEGIN)
+            propagate_notification(Control.NOTIFICATION_SCROLL_END)
+            if scrolling:
+                scrolling = false
+                scroll_ended.emit()
+
+    func _gui_input(event: InputEvent) -> void:
+        if event is InputEventScreenTouch:
+            if event.pressed and finger == -1:
+                finger = event.index
+                origin = event.position
+                initial_scroll = scroll_vertical
+            elif not event.pressed and event.index == finger:
+                finger = -1
+                if scrolling:
+                    scrolling = false
+                    propagate_notification(Control.NOTIFICATION_SCROLL_END)
+                    scroll_ended.emit()
+        elif event is InputEventScreenDrag and event.index == finger:
+            var displacement: float = origin.y - event.position.y
+            if not scrolling and absf(displacement) > 12.0:
+                scrolling = true
+                # Cancel the child button before release can navigate.
+                propagate_notification(Control.NOTIFICATION_SCROLL_BEGIN)
+                scroll_started.emit()
+            if scrolling:
+                scroll_vertical = initial_scroll + int(displacement)
+                accept_event()
+
 var _practice_book: Dictionary = Practice.empty_book()
 var _practice_round: Dictionary = {}
 var _practice_pending: Dictionary = {}
@@ -53,7 +94,7 @@ func _ready() -> void:
     _practice_layer.add_child(shade)
     _practice_panel = PanelContainer.new()
     _practice_layer.add_child(_practice_panel)
-    _practice_scroll = ScrollContainer.new()
+    _practice_scroll = PracticeTouchScroll.new()
     _practice_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
     _practice_panel.add_child(_practice_scroll)
     _practice_content = VBoxContainer.new()
@@ -304,11 +345,15 @@ func _practice_label(text: String) -> Label:
     _practice_content.add_child(label)
     return label
 
-func _practice_button(text: String, action: Callable, enabled: bool = true) -> Button:
+func _practice_button(text: String, action: Callable, enabled: bool = true, press_immediately: bool = false) -> Button:
     var button := Button.new()
     button.text = text
     button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    button.action_mode = BaseButton.ACTION_MODE_BUTTON_PRESS
+    # Let the parent receive touch drags. Navigation commits only on release,
+    # so ScrollContainer can cancel a tap when it becomes a swipe. Timing
+    # controls keep their finger-down boundary for precise stop measurements.
+    button.mouse_filter = Control.MOUSE_FILTER_PASS
+    button.action_mode = BaseButton.ACTION_MODE_BUTTON_PRESS if press_immediately else BaseButton.ACTION_MODE_BUTTON_RELEASE
     button.pressed.connect(action)
     button.disabled = not enabled
     _practice_content.add_child(button)
@@ -396,10 +441,10 @@ func _practice_render_run() -> void:
             _practice_label(str(index + 1) + " · %.3f%% · " % prior.value + _practice_timing(prior))
     elif _practice_round.state == "paused":
         _practice_label(_practice_t("PAUSIERT · Zeiger bleibt stehen. Fortsetzen startet ausdrücklich hier.", "PAUSED · The cursor is held. Resume explicitly from here."))
-        _practice_button(_practice_t("FORTSETZEN", "RESUME"), _practice_resume)
+        _practice_button(_practice_t("FORTSETZEN", "RESUME"), _practice_resume, true, true)
     else:
-        _practice_button(_practice_t("START", "START") if _practice_round.state == "ready" else _practice_t("JETZT STOPPEN", "STOP NOW"), _practice_action)
-        if _practice_round.state == "running": _practice_button(_practice_t("PAUSE", "PAUSE"), _practice_pause)
+        _practice_button(_practice_t("START", "START") if _practice_round.state == "ready" else _practice_t("JETZT STOPPEN", "STOP NOW"), _practice_action, true, true)
+        if _practice_round.state == "running": _practice_button(_practice_t("PAUSE", "PAUSE"), _practice_pause, true, true)
     _practice_update_meter()
 
 func _practice_timing(outcome: Dictionary) -> String:

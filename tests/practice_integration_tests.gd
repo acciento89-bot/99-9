@@ -116,5 +116,87 @@ func run_checks() -> void:
     app.queue_free()
     second.queue_free()
     await process_frame
+    await touch_navigation_checks(path + ".touch")
     if failures == 0: print("NN PRACTICE INTEGRATION PASS checks=", checks)
     quit(0 if failures == 0 else 1)
+
+# Actual engine GUI event propagation, not direct pressed.emit()/handler calls.
+func send_touch(position: Vector2, pressed: bool) -> void:
+    var event := InputEventScreenTouch.new()
+    event.index = 0
+    event.position = position
+    event.pressed = pressed
+    root.push_input(event, true)
+
+func practice_button(app: Probe, prefix: String) -> Button:
+    for child in app._practice_content.get_children():
+        if child is Button and child.text.begins_with(prefix): return child
+    return null
+
+func touch_navigation_checks(path: String) -> void:
+    root.size = Vector2i(540, 720)
+    var app := make_app(path)
+    await process_frame
+    app._practice_open_menu()
+    await process_frame
+    await process_frame
+    var stage := practice_button(app, "1 ·")
+    check(stage != null and app._practice_scroll.get_v_scroll_bar().max_value > app._practice_scroll.size.y, "compact actual GUI has scrollable stages")
+    var origin := stage.get_global_rect().get_center()
+    send_touch(origin, true)
+    await process_frame
+    check(app._practice_book.active == null, "finger down on stage does not prematurely begin a session")
+    for step in range(1, 7):
+        var drag := InputEventScreenDrag.new()
+        drag.index = 0
+        drag.position = origin - Vector2(0, step * 14)
+        drag.relative = Vector2(0, -14)
+        root.push_input(drag, true)
+        await process_frame
+    send_touch(origin - Vector2(0, 84), false)
+    await process_frame
+    check(app._practice_scroll.scroll_vertical > 0 and app._practice_book.active == null, "drag across stage scrolls without navigation")
+    app._practice_scroll.scroll_vertical = 0
+    await process_frame
+    origin = stage.get_global_rect().get_center()
+    send_touch(origin, true)
+    # Android may drop the release while backgrounded. A subsequent pointer
+    # with another ID must still be able to scroll after focus returns.
+    app._practice_scroll.notification(NOTIFICATION_APPLICATION_FOCUS_OUT)
+    app._practice_scroll.notification(NOTIFICATION_APPLICATION_FOCUS_IN)
+    var resumed_touch := InputEventScreenTouch.new()
+    resumed_touch.index = 1
+    resumed_touch.position = origin
+    resumed_touch.pressed = true
+    root.push_input(resumed_touch, true)
+    for step in range(1, 7):
+        var resumed_drag := InputEventScreenDrag.new()
+        resumed_drag.index = 1
+        resumed_drag.position = origin - Vector2(0, step * 14)
+        resumed_drag.relative = Vector2(0, -14)
+        root.push_input(resumed_drag, true)
+        await process_frame
+    check(app._practice_scroll.scroll_vertical > 0 and app._practice_book.active == null, "dropped background release cannot block the next scroll gesture")
+    resumed_touch.pressed = false
+    resumed_touch.position = origin - Vector2(0, 84)
+    root.push_input(resumed_touch, true)
+    send_touch(origin, false)
+    if app._practice_book.active == null:
+        app._practice_scroll.scroll_vertical = 0
+        await process_frame
+        origin = stage.get_global_rect().get_center()
+        send_touch(origin, true)
+        await process_frame
+        check(app._practice_book.active == null, "ordinary stage tap waits for release")
+        send_touch(origin, false)
+        await process_frame
+        check(app._practice_book.active != null and app._practice_book.active.round.state == "ready", "ordinary released tap begins one saved session")
+        await process_frame
+        var start := practice_button(app, "START")
+        origin = start.get_global_rect().get_center()
+        send_touch(origin, true)
+        await process_frame
+        check(app._practice_round.state == "running", "timing start remains immediate on finger down")
+        send_touch(origin, false)
+    app.queue_free()
+    await process_frame
