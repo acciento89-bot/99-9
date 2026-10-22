@@ -1,27 +1,7 @@
 name: 99.9 Android Store Screenshots
 
 on:
-  pull_request:
-    paths:
-      - 'project.godot'
-      - 'export_presets.cfg'
-      - 'scenes/**'
-      - 'scripts/**'
-      - 'assets/**'
-      - 'addons/**'
-      - '.github/scripts/capture-android-store-screenshots.sh'
-      - '.github/workflows/android-store-screenshots.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'project.godot'
-      - 'export_presets.cfg'
-      - 'scenes/**'
-      - 'scripts/**'
-      - 'assets/**'
-      - 'addons/**'
-      - '.github/scripts/capture-android-store-screenshots.sh'
-      - '.github/workflows/android-store-screenshots.yml'
+  # Device jobs are serially dispatched after signed-candidate validation.
   workflow_dispatch:
 
 permissions:
