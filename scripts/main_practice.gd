@@ -22,7 +22,13 @@ class PracticeTouchScroll extends ScrollContainer:
 
     func _gui_input(event: InputEvent) -> void:
         if event is InputEventScreenTouch:
-            if event.pressed and finger == -1:
+            if event.pressed and (finger == -1 or finger == event.index):
+                # A release callback can rebuild/remove the touched child before
+                # the release bubbles here. A new down is a new gesture boundary.
+                if scrolling:
+                    scrolling = false
+                    propagate_notification(Control.NOTIFICATION_SCROLL_END)
+                    scroll_ended.emit()
                 finger = event.index
                 origin = event.position
                 initial_scroll = scroll_vertical

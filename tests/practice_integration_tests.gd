@@ -136,6 +136,7 @@ func practice_button(app: Probe, prefix: String) -> Button:
 func touch_navigation_checks(path: String) -> void:
     root.size = Vector2i(540, 720)
     var app := make_app(path)
+    app._practice_de = false
     await process_frame
     app._practice_open_menu()
     await process_frame
@@ -181,9 +182,32 @@ func touch_navigation_checks(path: String) -> void:
     resumed_touch.position = origin - Vector2(0, 84)
     root.push_input(resumed_touch, true)
     send_touch(origin, false)
+    app._practice_scroll.scroll_vertical = int(app._practice_scroll.get_v_scroll_bar().max_value)
+    await process_frame
+    await process_frame
+    var language := practice_button(app, "LANGUAGE:")
+    origin = language.get_global_rect().get_center()
+    send_touch(origin, true)
+    send_touch(origin, false)
+    await process_frame
+    await process_frame
+    check(app._practice_de, "released language button rebuilds the visible ladder")
+    var bottom_scroll := app._practice_scroll.scroll_vertical
+    origin = app._practice_scroll.get_global_rect().get_center()
+    send_touch(origin, true)
+    for step in range(1, 7):
+        var reverse_drag := InputEventScreenDrag.new()
+        reverse_drag.index = 0
+        reverse_drag.position = origin + Vector2(0, step * 14)
+        reverse_drag.relative = Vector2(0, 14)
+        root.push_input(reverse_drag, true)
+        await process_frame
+    send_touch(origin + Vector2(0, 84), false)
+    check(app._practice_scroll.scroll_vertical < bottom_scroll, "swipe after language rebuild starts at the new finger position")
     if app._practice_book.active == null:
         app._practice_scroll.scroll_vertical = 0
         await process_frame
+        stage = practice_button(app, "1 ·")
         origin = stage.get_global_rect().get_center()
         send_touch(origin, true)
         await process_frame
