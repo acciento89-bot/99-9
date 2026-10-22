@@ -345,6 +345,9 @@ func _practice_render() -> void:
 
 func _practice_render_ladder() -> void:
     _practice_status.text = _practice_t("12 Versuche je Sitzung. 8 Treffer öffnen die nächste Stufe. Eigene Übungsrekorde: Arcade-Punkte, Serien und Ranglisten bleiben getrennt.", "12 attempts per session. 8 hits open the next stage. Separate practice records: arcade scores, streaks and rankings stay separate.")
+    _practice_button("DATENSCHUTZ / PRIVACY POLICY", func() -> void:
+        OS.shell_open("https://kamilunavo.com/ninenine-privacy.html")
+    )
     var active = _practice_book.active
     if active != null and active.state == "active":
         _practice_button(_practice_t("SITZUNG FORTSETZEN · STUFE ", "CONTINUE SESSION · STAGE ") + str(active.stage), _practice_open_active)
