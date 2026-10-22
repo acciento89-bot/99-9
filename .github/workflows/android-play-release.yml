@@ -1,17 +1,7 @@
-name: 99.9 Android Play Release
+name: Legacy Android Play uploader (retired)
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/android-play-release.yml'
-      - 'assets/icon.svg'
-      - 'assets/icon.png'
-      - 'export_presets.cfg'
-      - 'store/google-play/**'
-      - 'scripts/check_launcher_icons.py'
-      - 'scripts/export_launcher_icons.py'
 
 permissions:
   contents: read
@@ -21,12 +11,14 @@ env:
   GODOT_VERSION: "4.7.2"
   GODOT_TAG: "4.7.2-stable"
   PACKAGE_NAME: de.kamilunavo.ninenine
-  EXPECTED_VERSION_CODE: '4'
+  EXPECTED_VERSION_CODE: '6'
   WIF_PROVIDER: projects/1058001477767/locations/global/workloadIdentityPools/github/providers/github-actions
   GOOGLE_SERVICE_ACCOUNT: navoops@emerald-caster-508318-f2.iam.gserviceaccount.com
 
 jobs:
   android-play:
+    # Retired: use the build-only CENTRAL workflow and reviewed Console delivery.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

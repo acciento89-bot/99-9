@@ -6,7 +6,7 @@ signal interstitial_closed
 signal privacy_options_changed(required: bool)
 signal ad_error(message: String)
 
-const TEST_INTERSTITIAL_ANDROID := "ca-app-pub-3940256099942544/1033173712"
+const INTERSTITIAL_ANDROID := "ca-app-pub-8944085355624754/9565431530"
 const INTERSTITIAL_IOS := "ca-app-pub-8944085355624754/9156045067"
 const SAVE_PATH := "user://save.json"
 
@@ -198,7 +198,7 @@ func _load_interstitial() -> void:
     if _ads_removed or not _ads_ready or not _consent_allows_ads() or _interstitial_ad != null:
         return
 
-    var unit_id := TEST_INTERSTITIAL_ANDROID if OS.get_name() == "Android" else INTERSTITIAL_IOS
+    var unit_id := INTERSTITIAL_ANDROID if OS.get_name() == "Android" else INTERSTITIAL_IOS
     _load_callback = InterstitialAdLoadCallback.new()
 
     _load_callback.on_ad_failed_to_load = func(error: LoadAdError) -> void:

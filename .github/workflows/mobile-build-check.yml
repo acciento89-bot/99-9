@@ -5,6 +5,11 @@ on:
     branches: [main, 'agent/**', 'feature/**']
   pull_request:
   workflow_dispatch:
+    inputs:
+      include_ios:
+        description: Build iOS only during the later authorized iOS phase
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -66,6 +71,7 @@ jobs:
           jq -e '.mode == "hit" and (.top | type == "array")' leaderboard.json >/dev/null
 
   ios-unsigned:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.include_ios }}
     runs-on: macos-26
     timeout-minutes: 45
     steps:
@@ -169,7 +175,7 @@ jobs:
           ./godot --headless --path . --export-debug "Android Playtest" build/android/99-9.aab
           test -s build/android/99-9.aab
           unzip -l build/android/99-9.aab | grep -Ei 'GodotIap|billing' >/dev/null || { echo 'IAP/Billing payload missing from AAB'; exit 1; }
-          unzip -p build/android/99-9.aab base/manifest/AndroidManifest.xml | strings | grep -F 'ca-app-pub-3940256099942544~3347511713' >/dev/null || { echo 'AdMob Android demo App ID missing from manifest'; exit 1; }
+          unzip -p build/android/99-9.aab base/manifest/AndroidManifest.xml | strings | grep -F 'ca-app-pub-8944085355624754~5774982450' >/dev/null || { echo 'Own AdMob Android App ID missing from manifest'; exit 1; }
           unzip -p build/android/99-9.aab 'base/dex/classes*.dex' | strings | grep -Em1 'com/google/android/gms/ads|MobileAds' >/dev/null || { echo 'Google Mobile Ads classes missing from AAB'; exit 1; }
       - uses: actions/upload-artifact@v4
         with:
