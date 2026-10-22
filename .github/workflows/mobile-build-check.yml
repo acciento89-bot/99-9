@@ -5,6 +5,11 @@ on:
     branches: [main, 'agent/**', 'feature/**']
   pull_request:
   workflow_dispatch:
+    inputs:
+      include_ios:
+        description: Build iOS only during the later authorized iOS phase
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -66,6 +71,7 @@ jobs:
           jq -e '.mode == "hit" and (.top | type == "array")' leaderboard.json >/dev/null
 
   ios-unsigned:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.include_ios }}
     runs-on: macos-26
     timeout-minutes: 45
     steps:
