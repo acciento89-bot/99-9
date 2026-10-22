@@ -1,11 +1,7 @@
 name: Android central-signed bundle
 'on':
   workflow_dispatch: null
-  push:
-    branches:
-    - main
-    paths:
-    - .github/workflows/android-central-bundle.yml
+
 permissions:
   contents: read
 concurrency:
@@ -22,7 +18,7 @@ jobs:
     env:
       APP_ID: 99-9
       PACKAGE_NAME: de.kamilunavo.ninenine
-      EXPECTED_VERSION_CODE: '5'
+      EXPECTED_VERSION_CODE: '6'
       GODOT_VERSION: 4.7.2
       GODOT_TAG: 4.7.2-stable
     steps:
@@ -60,6 +56,12 @@ jobs:
         unzip -q "$T/android_source.zip" -d android/build
         printf '%s\n' "${GODOT_VERSION}.stable" > android/.build_version
         chmod +x android/build/gradlew
+    - name: Validate precision rules and durable archive before export
+      run: |
+        set -euo pipefail
+        bash scripts/run-practice-core-tests.sh "$GITHUB_WORKSPACE/godot"
+        bash scripts/run-practice-archive-tests.sh "$GITHUB_WORKSPACE/godot"
+        bash scripts/run-practice-integration-tests.sh "$GITHUB_WORKSPACE/godot"
     - name: Export release AAB with temporary build-only identity
       run: |-
         set -euo pipefail
@@ -68,8 +70,8 @@ jobs:
         from pathlib import Path
         import os
         p=Path('export_presets.cfg'); s=p.read_text()
-        assert s.count('version/code=4')==1
-        s=s.replace('version/code=4','version/code=5')
+        assert s.count('version/code=6')==1
+        assert s.count('version/name="1.1.0"')==1
         lines=[l for l in s.splitlines() if not l.startswith(('keystore/release=','keystore/release_user=','keystore/release_password='))]
         s='\n'.join(lines)+'\n'
         anchor='gradle_build/export_format=1'
@@ -108,7 +110,7 @@ jobs:
     env:
       APP_ID: 99-9
       PACKAGE_NAME: de.kamilunavo.ninenine
-      EXPECTED_VERSION_CODE: '5'
+      EXPECTED_VERSION_CODE: '6'
     steps:
     - uses: actions/setup-java@v5
       with:
@@ -171,7 +173,7 @@ jobs:
     - name: Preserve verified release bundle
       uses: actions/upload-artifact@v4
       with:
-        name: 99-9-v5-central-signed-aab
+        name: 99-9-v6-central-signed-aab
         path: signed/
         if-no-files-found: error
         retention-days: 30
