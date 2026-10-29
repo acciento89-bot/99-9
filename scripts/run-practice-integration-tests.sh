@@ -4,7 +4,7 @@ practice_repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 practice_godot=${1:-/Volumes/SSK SSD/Kamilunavo/Cache/Godot/4.7.1/Godot.app/Contents/MacOS/Godot}
 practice_temp=$(mktemp -d "${TMPDIR:-/tmp}/ninenine-practice-integration.XXXXXX")
 trap 'rm -rf -- "$practice_temp"' EXIT HUP INT TERM
-printf '%s\n' 'config_version=5' '[application]' 'config/name="NineNineInertProviderIntegrationQA"' '[display]' 'window/size/viewport_width=1080' 'window/size/viewport_height=1920' '[rendering]' 'renderer/rendering_method="gl_compatibility"' > "$practice_temp/project.godot"
+printf '%s\n' 'config_version=5' '[application]' 'config/name="NineNineInertProviderIntegrationQA"' '[display]' 'window/size/viewport_width=1080' 'window/size/viewport_height=1920' '[input_devices]' 'pointing/emulate_mouse_from_touch=false' '[rendering]' 'renderer/rendering_method="gl_compatibility"' > "$practice_temp/project.godot"
 mkdir "$practice_temp/scripts" "$practice_temp/data"
 mkdir -p "$practice_temp/assets/fonts/hammersmithone"
 cp "$practice_repo/assets/fonts/hammersmithone/HammersmithOne-Regular.ttf" "$practice_temp/assets/fonts/hammersmithone/"

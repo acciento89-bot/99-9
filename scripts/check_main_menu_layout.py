@@ -24,6 +24,9 @@ class MainMenuSourceTests(unittest.TestCase):
         for required in ['available.size', 'get_combined_minimum_size()', 'custom_minimum_size', '_practice_menu_footer_offsets']:
             self.assertIn(required, layout)
         self.assertNotIn('.pressed.connect', build, 'Keep existing five callbacks on their actual controls')
+    def test_actual_menu_buttons_allow_parent_touch_scroll(self):
+        self.assertIn("_practice_entry.mouse_filter = Control.MOUSE_FILTER_PASS", function("_ready"))
+        self.assertIn("child.mouse_filter = Control.MOUSE_FILTER_PASS", function("_practice_build_menu_actions"))
     def test_entry_label_follows_existing_practice_language(self):
         self.assertNotIn('PRÄZISIONSTRAINING / PRECISION PRACTICE', SOURCE)
         self.assertIn('_practice_t("PRÄZISIONSTRAINING", "PRECISION PRACTICE")', function('_practice_entry_visibility'))

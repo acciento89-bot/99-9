@@ -93,6 +93,7 @@ func _ready() -> void:
     _practice_load()
     _practice_entry = _make_button(_practice_t("PRÄZISIONSTRAINING", "PRECISION PRACTICE"), Vector2(820, 144), 40, "secondary")
     _practice_entry.name = "PrecisionPracticeEntry"
+    _practice_entry.mouse_filter = Control.MOUSE_FILTER_PASS
     _practice_entry.pressed.connect(_practice_open_menu)
     _practice_build_menu_actions()
     _practice_layer = Control.new()
@@ -127,6 +128,7 @@ func _practice_build_menu_actions() -> void:
     for child in original_children:
         if child is Button:
             actions.append(child)
+            child.mouse_filter = Control.MOUSE_FILTER_PASS
             var bounds := Rect2(child.position, child.size)
             _practice_menu_action_bounds = bounds if actions.size() == 1 else _practice_menu_action_bounds.merge(bounds)
     _practice_menu_scroll = PracticeTouchScroll.new()
