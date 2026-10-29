@@ -116,6 +116,7 @@ func run_checks() -> void:
     app.queue_free()
     second.queue_free()
     await process_frame
+    await main_menu_layout_checks(path + ".menu")
     await touch_navigation_checks(path + ".touch")
     if failures == 0: print("NN PRACTICE INTEGRATION PASS checks=", checks)
     quit(0 if failures == 0 else 1)
@@ -132,6 +133,80 @@ func practice_button(app: Probe, prefix: String) -> Button:
     for child in app._practice_content.get_children():
         if child is Button and child.text.begins_with(prefix): return child
     return null
+
+func main_menu_layout_checks(path: String) -> void:
+    root.size = Vector2i(1080, 1920)
+    var app := make_app(path)
+    await process_frame
+    await process_frame
+    var actions := app._practice_menu_actions.get_children()
+    check(actions.size() == 6 and actions[1] == app._practice_entry, "practice joins the real Classic/ranking/stats/design/settings menu flow")
+    app._practice_de = false
+    app._practice_entry_visibility()
+    check(app._practice_entry.text == "PRECISION PRACTICE", "English preference yields one English main-menu label")
+    app._practice_de = true
+    app._practice_entry_visibility()
+    check(app._practice_entry.text == "PRÄZISIONSTRAINING", "German preference yields one German main-menu label")
+    for viewport in [Vector2i(1080, 1920), Vector2i(540, 720), Vector2i(320, 640)]:
+        root.size = viewport
+        app._practice_layout()
+        await process_frame
+        await process_frame
+        app._practice_layout()
+        var previous_bottom := -INF
+        var menu_rect := app._practice_menu_scroll.get_global_rect()
+        for action in actions:
+            var bounds := action.get_global_rect()
+            check(bounds.position.y >= previous_bottom, "actual container menu actions never overlap at " + str(viewport))
+            check(bounds.size.y + .1 >= 48.0 * app._practice_unit, "menu action keeps a 48dp touch height at " + str(viewport))
+            check(bounds.position.x >= menu_rect.position.x - .1 and bounds.end.x <= menu_rect.end.x + .1, "menu action fits the viewport width at " + str(viewport))
+            previous_bottom = bounds.end.y
+        if viewport.y == 720:
+            check(app._practice_menu_scroll.get_v_scroll_bar().max_value > app._practice_menu_scroll.size.y, "compact main menu exposes vertical scrolling")
+        app._practice_menu_scroll.scroll_vertical = int(app._practice_menu_scroll.get_v_scroll_bar().max_value)
+        await process_frame
+        var settings: Button = actions.back()
+        check(menu_rect.encloses(settings.get_global_rect()), "Settings stays reachable below practice at " + str(viewport))
+        for footer in app._practice_menu_footer_offsets:
+            check(footer.get_global_rect().position.y >= settings.get_global_rect().end.y, "menu footer follows the final actual action")
+        if viewport.y == 720:
+            app._practice_menu_scroll.scroll_vertical = 0
+            await process_frame
+            var swipe_origin := app._practice_entry.get_global_rect().get_center()
+            send_touch(swipe_origin, true)
+            for step in range(1, 7):
+                var drag := InputEventScreenDrag.new()
+                drag.index = 0
+                drag.position = swipe_origin - Vector2(0, step * 14)
+                drag.relative = Vector2(0, -14)
+                root.push_input(drag, true)
+                await process_frame
+            send_touch(swipe_origin - Vector2(0, 84), false)
+            check(app._practice_menu_scroll.scroll_vertical > 0 and not app._practice_open, "swiping the real main-menu practice action scrolls without navigating")
+    root.size = Vector2i(1080, 1920)
+    app._practice_layout()
+    app._practice_menu_scroll.scroll_vertical = 0
+    await process_frame
+    await process_frame
+    var origin := app._practice_entry.get_global_rect().get_center()
+    send_touch(origin, true)
+    check(not app._practice_open, "main-menu practice action waits for finger release")
+    send_touch(origin, false)
+    await process_frame
+    check(app._practice_open and app._practice_book.active == null, "actual released practice action opens the ladder without starting or charging a session")
+    app._practice_exit()
+    await process_frame
+    await process_frame
+    app._practice_menu_scroll.scroll_vertical = int(app._practice_menu_scroll.get_v_scroll_bar().max_value)
+    await process_frame
+    var final_settings: Button = actions.back()
+    origin = final_settings.get_global_rect().get_center()
+    send_touch(origin, true)
+    send_touch(origin, false)
+    await process_frame
+    check(app.screen == app.AppScreen.SETTINGS, "reparented real Settings retains its original navigation callback")
+    app.queue_free()
+    await process_frame
 
 func touch_navigation_checks(path: String) -> void:
     root.size = Vector2i(540, 720)

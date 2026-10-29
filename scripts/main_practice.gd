@@ -64,6 +64,13 @@ var _practice_last_tick: int = 0
 var _practice_last_checkpoint: int = 0
 var _practice_layout_poll := 0.0
 var _practice_entry: Button
+var _practice_menu_scroll: ScrollContainer
+var _practice_menu_content: Control
+var _practice_menu_canvas: Control
+var _practice_menu_actions: VBoxContainer
+var _practice_menu_action_bounds := Rect2()
+var _practice_menu_footer_offsets: Dictionary = {}
+var _practice_menu_button_heights: Dictionary = {}
 var _practice_layer: Control
 var _practice_panel: PanelContainer
 var _practice_scroll: ScrollContainer
@@ -84,11 +91,10 @@ func _ready() -> void:
     super._ready()
     _practice_store = PracticeArchive.new(_practice_archive_path())
     _practice_load()
-    _practice_entry = Button.new()
+    _practice_entry = _make_button(_practice_t("PRÄZISIONSTRAINING", "PRECISION PRACTICE"), Vector2(820, 144), 40, "secondary")
     _practice_entry.name = "PrecisionPracticeEntry"
-    _practice_entry.text = "PRÄZISIONSTRAINING / PRECISION PRACTICE"
     _practice_entry.pressed.connect(_practice_open_menu)
-    add_child(_practice_entry)
+    _practice_build_menu_actions()
     _practice_layer = Control.new()
     _practice_layer.name = "PrecisionPractice"
     _practice_layer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -109,8 +115,68 @@ func _ready() -> void:
     _practice_initialized = true
     _practice_layer.visible = false
     get_viewport().size_changed.connect(_practice_layout)
+    _apply_theme_to_controls()
     _practice_layout()
     _practice_entry_visibility()
+
+func _practice_build_menu_actions() -> void:
+    # Keep the actual Classic/ranking/stats/design/settings controls and their
+    # callbacks. One scrollable menu owns every action, including practice.
+    var actions: Array[Button] = []
+    var original_children := menu_layer.get_children()
+    for child in original_children:
+        if child is Button:
+            actions.append(child)
+            var bounds := Rect2(child.position, child.size)
+            _practice_menu_action_bounds = bounds if actions.size() == 1 else _practice_menu_action_bounds.merge(bounds)
+    _practice_menu_scroll = PracticeTouchScroll.new()
+    _practice_menu_scroll.name = "MainMenuScroll"
+    _practice_menu_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+    menu_layer.add_child(_practice_menu_scroll)
+    _practice_menu_content = Control.new()
+    _practice_menu_content.mouse_filter = Control.MOUSE_FILTER_PASS
+    _practice_menu_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    _practice_menu_scroll.add_child(_practice_menu_content)
+    _practice_menu_canvas = Control.new()
+    _practice_menu_canvas.mouse_filter = Control.MOUSE_FILTER_PASS
+    _practice_menu_content.add_child(_practice_menu_canvas)
+    for child in original_children:
+        child.reparent(_practice_menu_canvas)
+        if child is Control and not child is Button and child.position.y >= _practice_menu_action_bounds.end.y:
+            _practice_menu_footer_offsets[child] = child.position.y - _practice_menu_action_bounds.end.y
+    _practice_menu_actions = VBoxContainer.new()
+    _practice_menu_actions.name = "MainMenuActions"
+    _practice_menu_actions.position = _practice_menu_action_bounds.position
+    _practice_menu_actions.add_theme_constant_override("separation", 12)
+    _practice_menu_canvas.add_child(_practice_menu_actions)
+    for index in range(actions.size()):
+        var action := actions[index]
+        _practice_menu_button_heights[action] = action.custom_minimum_size.y
+        action.reparent(_practice_menu_actions)
+        if index == 0:
+            _practice_menu_actions.add_child(_practice_entry)
+            _practice_menu_button_heights[_practice_entry] = _practice_entry.custom_minimum_size.y
+
+func _practice_menu_layout(available: Rect2) -> void:
+    _practice_menu_scroll.position = available.position
+    _practice_menu_scroll.size = available.size
+    var canvas_scale := maxf(.001, minf(1.0, available.size.x / 1080.0))
+    _practice_menu_canvas.scale = Vector2.ONE * canvas_scale
+    _practice_menu_canvas.position.x = (available.size.x - 1080.0 * canvas_scale) / 2.0
+    for action in _practice_menu_button_heights:
+        action.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+        action.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+        action.custom_minimum_size = Vector2(0, maxf(float(_practice_menu_button_heights[action]), 48.0 * _practice_unit / canvas_scale))
+    _practice_menu_actions.size.x = _practice_menu_action_bounds.size.x
+    _practice_menu_actions.size.y = _practice_menu_actions.get_combined_minimum_size().y
+    var actions_end := _practice_menu_actions.position.y + _practice_menu_actions.size.y
+    for footer in _practice_menu_footer_offsets:
+        footer.position.y = actions_end + float(_practice_menu_footer_offsets[footer])
+    var content_end := actions_end
+    for child in _practice_menu_canvas.get_children():
+        if child is Control: content_end = maxf(content_end, child.position.y + child.size.y)
+    _practice_menu_canvas.size = Vector2(1080, content_end + 12)
+    _practice_menu_content.custom_minimum_size = Vector2(0, (content_end + 12) * canvas_scale)
 
 func _practice_t(de: String, en: String) -> String:
     return de if _practice_de else en
@@ -138,13 +204,15 @@ func _show_screen(target: AppScreen) -> void:
 func _apply_theme_to_controls() -> void:
     super._apply_theme_to_controls()
     if _practice_initialized:
-        _practice_style_button(_practice_entry)
         if _practice_open: _practice_render()
 
 func _practice_entry_visibility() -> void:
     if not _practice_initialized: return
+    _practice_entry.text = _practice_t("PRÄZISIONSTRAINING", "PRECISION PRACTICE")
+    var was_visible := _practice_entry.visible
     _practice_entry.visible = not _practice_open and screen == AppScreen.MENU and not achievements_open
     _practice_entry.disabled = waiting_for_interstitial_close
+    if was_visible != _practice_entry.visible: _practice_layout()
 
 func _practice_open_menu() -> void:
     if waiting_for_interstitial_close: return
@@ -313,9 +381,7 @@ func _practice_layout() -> void:
     var available := _practice_safe_rect()
     var margin := 12.0 * _practice_unit
     var width := maxf(1.0, available.size.x - margin * 2.0)
-    _practice_entry.position = Vector2(available.position.x + margin, available.end.y - margin - 64.0 * _practice_unit)
-    _practice_entry.size = Vector2(width, 64.0 * _practice_unit)
-    _practice_style_button(_practice_entry)
+    _practice_menu_layout(available)
     var panel_width := minf(width, 560.0 * _practice_unit)
     _practice_panel.position = Vector2(available.get_center().x - panel_width / 2.0, available.position.y + margin)
     _practice_panel.size = Vector2(panel_width, maxf(1, available.size.y - margin * 2.0))
