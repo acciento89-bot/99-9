@@ -320,7 +320,7 @@ func _practice_layout() -> void:
     _practice_panel.position = Vector2(available.get_center().x - panel_width / 2.0, available.position.y + margin)
     _practice_panel.size = Vector2(panel_width, maxf(1, available.size.y - margin * 2.0))
     _practice_content.add_theme_constant_override("separation", int(12 * _practice_unit))
-    var paper := _outlined_box(_theme_colors(active_theme_id).surface, _theme_colors(active_theme_id).border, int(16 * _practice_unit), 1)
+    var paper := _outlined_box(_theme_colors(active_theme_id).surface, _theme_colors(active_theme_id).border, int(3 * _practice_unit), 1)
     paper.content_margin_left = margin
     paper.content_margin_right = margin
     paper.content_margin_top = margin
@@ -337,9 +337,9 @@ func _practice_style_button(button: Button) -> void:
     button.add_theme_font_size_override("font_size", int(18 * _practice_unit))
     button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     button.add_theme_color_override("font_color", colors.text)
-    button.add_theme_stylebox_override("normal", _outlined_box(colors.surface2, colors.border, int(10 * _practice_unit), 1))
-    button.add_theme_stylebox_override("pressed", _outlined_box(colors.accent, colors.accent2, int(10 * _practice_unit), 2))
-    button.add_theme_stylebox_override("focus", _outlined_box(colors.surface2, colors.accent2, int(10 * _practice_unit), 2))
+    button.add_theme_stylebox_override("normal", _outlined_box(colors.surface2, colors.border, int(3 * _practice_unit), 1))
+    button.add_theme_stylebox_override("pressed", _outlined_box(colors.accent, colors.accent2, int(3 * _practice_unit), 2))
+    button.add_theme_stylebox_override("focus", _outlined_box(colors.surface2, colors.accent2, int(3 * _practice_unit), 2))
 
 func _practice_label(text: String) -> Label:
     var label := Label.new()

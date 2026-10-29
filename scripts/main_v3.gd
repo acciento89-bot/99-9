@@ -1,5 +1,8 @@
 extends Control
 
+const PRODUCT_FONT = preload("res://assets/fonts/hammersmithone/HammersmithOne-Regular.ttf")
+var menu_calibration: Control
+
 const SAVE_PATH := "user://save.json"
 const APP_VERSION := "1.0.0"
 const TARGET := 100.0
@@ -90,6 +93,9 @@ var themed_panels: Array[Panel] = []
 var muted_labels: Array[Label] = []
 
 func _ready() -> void:
+    var instrument_theme := Theme.new()
+    instrument_theme.default_font = PRODUCT_FONT
+    theme = instrument_theme
     rng.randomize()
     _load_save()
     if player_id.is_empty():
@@ -182,8 +188,20 @@ func _build_menu_ui() -> void:
     var menu_title := _make_label("99.9%", 132, HORIZONTAL_ALIGNMENT_CENTER)
     _place(menu_title, Vector2(90, 230), Vector2(900, 165), menu_layer)
 
-    var menu_tagline := _make_muted_label("ONE TAP. ONE CHANCE.", 29, HORIZONTAL_ALIGNMENT_CENTER)
+    var menu_tagline := _make_muted_label("PRECISION · 0—100%", 29, HORIZONTAL_ALIGNMENT_CENTER)
     _place(menu_tagline, Vector2(100, 390), Vector2(880, 52), menu_layer)
+
+    # Calibration marks are decorative menu chrome; the live meter and input geometry stay unchanged.
+    menu_calibration = Control.new()
+    menu_calibration.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    _place(menu_calibration, Vector2(130, 465), Vector2(820, 26), menu_layer)
+    menu_calibration.draw.connect(func() -> void:
+        var palette := _theme_colors(active_theme_id)
+        menu_calibration.draw_line(Vector2(0, 0), Vector2(820, 0), palette["border"], 2.0)
+        for tick in range(41):
+            var x := float(tick) * 20.5
+            menu_calibration.draw_line(Vector2(x, 0), Vector2(x, 22 if tick % 10 == 0 else 11), palette["accent2"], 2.0)
+    )
 
     var score_card := _make_panel("card")
     _place(score_card, Vector2(130, 505), Vector2(820, 190), menu_layer)
@@ -202,34 +220,34 @@ func _build_menu_ui() -> void:
     menu_streak_label = _make_label("2", 40, HORIZONTAL_ALIGNMENT_CENTER)
     _place(menu_streak_label, Vector2(430, 62), Vector2(365, 72), score_card)
 
-    var play := _make_button("PLAY NOW", Vector2(820, 124), 42, "accent")
+    var play := _make_button("START CLASSIC", Vector2(820, 124), 42, "accent")
     _place(play, Vector2(130, 750), Vector2(820, 124), menu_layer)
     play.pressed.connect(_start_game_session)
 
-    var leaderboard := _make_button("WORLD RANKING", Vector2(390, 104), 28, "secondary")
-    _place(leaderboard, Vector2(130, 915), Vector2(390, 104), menu_layer)
+    var leaderboard := _make_button("WORLD RANKING", Vector2(820, 144), 40, "secondary")
+    _place(leaderboard, Vector2(130, 915), Vector2(820, 144), menu_layer)
     leaderboard.pressed.connect(func() -> void: _open_leaderboard("hit"))
 
-    var stats := _make_button("MY STATS", Vector2(390, 104), 28, "secondary")
-    _place(stats, Vector2(560, 915), Vector2(390, 104), menu_layer)
+    var stats := _make_button("MY STATS", Vector2(820, 144), 40, "secondary")
+    _place(stats, Vector2(130, 1070), Vector2(820, 144), menu_layer)
     stats.pressed.connect(func() -> void:
         _refresh_stats_screen()
         _show_screen(AppScreen.STATS)
     )
 
-    var designs := _make_button("DESIGNS", Vector2(390, 104), 28, "secondary")
-    _place(designs, Vector2(130, 1045), Vector2(390, 104), menu_layer)
+    var designs := _make_button("DESIGNS", Vector2(820, 144), 40, "secondary")
+    _place(designs, Vector2(130, 1225), Vector2(820, 144), menu_layer)
     designs.pressed.connect(_open_themes)
 
-    var settings := _make_button("SETTINGS", Vector2(390, 104), 28, "secondary")
-    _place(settings, Vector2(560, 1045), Vector2(390, 104), menu_layer)
+    var settings := _make_button("SETTINGS", Vector2(820, 144), 40, "secondary")
+    _place(settings, Vector2(130, 1380), Vector2(820, 144), menu_layer)
     settings.pressed.connect(_open_settings)
 
     menu_theme_label = _make_muted_label("THEME · MIDNIGHT", 22, HORIZONTAL_ALIGNMENT_CENTER)
-    _place(menu_theme_label, Vector2(140, 1260), Vector2(800, 55), menu_layer)
+    _place(menu_theme_label, Vector2(140, 1540), Vector2(800, 55), menu_layer)
 
     var online := _make_muted_label("GLOBAL RANKINGS · iOS + ANDROID", 21, HORIZONTAL_ALIGNMENT_CENTER)
-    _place(online, Vector2(120, 1470), Vector2(840, 55), menu_layer)
+    _place(online, Vector2(120, 1610), Vector2(840, 55), menu_layer)
 
 func _build_pause_ui() -> void:
     var shade := ColorRect.new()
@@ -971,10 +989,10 @@ func _apply_theme_to_controls() -> void:
         button.add_theme_color_override("font_color", colors["text"])
         button.add_theme_color_override("font_hover_color", Color.WHITE)
         button.add_theme_color_override("font_pressed_color", colors["text"])
-        button.add_theme_stylebox_override("normal", _outlined_box(normal, colors["border"], 24, 1))
-        button.add_theme_stylebox_override("hover", _outlined_box(hover, colors["accent"], 24, 2))
-        button.add_theme_stylebox_override("pressed", _outlined_box(pressed, colors["accent"], 24, 2))
-        button.add_theme_stylebox_override("focus", _outlined_box(normal, colors["accent2"], 24, 3))
+        button.add_theme_stylebox_override("normal", _outlined_box(normal, colors["border"], 4, 1))
+        button.add_theme_stylebox_override("hover", _outlined_box(hover, colors["accent"], 4, 2))
+        button.add_theme_stylebox_override("pressed", _outlined_box(pressed, colors["accent"], 4, 2))
+        button.add_theme_stylebox_override("focus", _outlined_box(normal, colors["accent2"], 4, 3))
 
     for panel in themed_panels:
         if not is_instance_valid(panel):
@@ -982,13 +1000,13 @@ func _apply_theme_to_controls() -> void:
         var role := str(panel.get_meta("theme_role", "card"))
         var fill: Color = colors["surface"]
         var border: Color = colors["border"]
-        var radius := 28
+        var radius := 4
         if role == "soft":
             fill = Color(colors["surface2"], 0.86)
-            radius = 26
+            radius = 2
         elif role == "row":
             fill = Color(colors["surface2"], 0.82)
-            radius = 20
+            radius = 0
         panel.add_theme_stylebox_override("panel", _outlined_box(fill, border, radius, 1))
 
     for label in muted_labels:
@@ -1000,6 +1018,7 @@ func _apply_theme_to_controls() -> void:
     if menu_theme_label != null:
         menu_theme_label.text = "THEME · %s" % _theme_name(selected_theme_id)
     _refresh_leaderboard_tabs()
+    if is_instance_valid(menu_calibration): menu_calibration.queue_redraw()
     queue_redraw()
 
 func _refresh_labels() -> void:
