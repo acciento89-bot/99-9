@@ -12,7 +12,7 @@ cp "$practice_repo/assets/fonts/hammersmithone/OFL.txt" "$practice_temp/assets/f
 cp "$practice_repo/tests/practice_integration_tests.gd" "$practice_temp/test.gd"
 # Exact actual ancestor UI/model/archive; original provider scripts, native
 # addons, main scene, user profile and all network configuration are excluded.
-for practice_source in "$practice_repo"/scripts/main_v*.gd "$practice_repo"/scripts/practice_model.gd "$practice_repo"/scripts/practice_archive.gd "$practice_repo"/scripts/main_practice.gd; do
+for practice_source in "$practice_repo"/scripts/main_v*.gd "$practice_repo"/scripts/practice_model.gd "$practice_repo"/scripts/practice_archive.gd "$practice_repo"/scripts/main_practice.gd "$practice_repo"/scripts/ranking_captions.gd; do
  [ -f "$practice_source" ] || continue
  cp "$practice_source" "$practice_temp/scripts/"
 done

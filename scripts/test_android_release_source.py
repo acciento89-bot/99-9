@@ -23,7 +23,10 @@ class AndroidReleaseSourceTests(unittest.TestCase):
                 self.assertEqual(options["version/name"].strip('"'), META["androidVersionName"])
                 self.assertEqual(options["package/unique_name"].strip('"'), META["package"])
         self.assertEqual(names, META["androidPresetNames"])
-        self.assertEqual(META["androidVersionCode"], META["savedLiveMax"] + 1)
+        self.assertEqual(META["savedLiveMax"], 6)  # Actual historical provider proof.
+        self.assertEqual(META.get("reservedUnpublishedVersionCodes"), [7])
+        self.assertEqual(META["androidVersionCode"], max([META["savedLiveMax"]] + META["reservedUnpublishedVersionCodes"]) + 1)
+        self.assertEqual(META["androidVersionCode"], 8)
 
     def test_ios_and_shared_project_bytes_preserved(self):
         ios = (ROOT / "export_presets.cfg").read_bytes().split(b"[preset.1]", 1)[0]
@@ -60,7 +63,7 @@ class AndroidReleaseSourceTests(unittest.TestCase):
                'name': META['androidVersionName'], 'PACKAGE_NAME': META['package'],
                'EXPECTED_VERSION_CODE': str(META['androidVersionCode']), 'EXPECTED_VERSION_NAME': META['androidVersionName']}
         self.assertEqual(subprocess.run(['bash'], input=script, text=True, env=env, capture_output=True).returncode, 0)
-        for delta in [{'package': 'de.example.other'}, {'code': '6'}, {'code': '70'},
+        for delta in [{'package': 'de.example.other'}, {'code': '6'}, {'code': '7'}, {'code': '70'},
                       {'name': '1.1.0'}, {'name': '1.2.0-beta'}]:
             with self.subTest(delta=delta):
                 self.assertNotEqual(subprocess.run(['bash'], input=script, text=True, env={**env, **delta}, capture_output=True).returncode, 0)

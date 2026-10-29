@@ -1,5 +1,6 @@
 extends Control
 
+const RankingCaptions = preload("res://scripts/ranking_captions.gd")
 const PRODUCT_FONT = preload("res://assets/fonts/hammersmithone/HammersmithOne-Regular.ttf")
 var menu_calibration: Control
 
@@ -91,6 +92,9 @@ var theme_card_buttons: Dictionary = {}
 var themed_buttons: Array[Button] = []
 var themed_panels: Array[Panel] = []
 var muted_labels: Array[Label] = []
+
+func _ranking_platform() -> String:
+    return OS.get_name()
 
 func _ready() -> void:
     var instrument_theme := Theme.new()
@@ -246,7 +250,7 @@ func _build_menu_ui() -> void:
     menu_theme_label = _make_muted_label("THEME · MIDNIGHT", 22, HORIZONTAL_ALIGNMENT_CENTER)
     _place(menu_theme_label, Vector2(140, 1540), Vector2(800, 55), menu_layer)
 
-    var online := _make_muted_label("GLOBAL RANKINGS · iOS + ANDROID", 21, HORIZONTAL_ALIGNMENT_CENTER)
+    var online := _make_muted_label(RankingCaptions.menu(_ranking_platform()), 21, HORIZONTAL_ALIGNMENT_CENTER)
     _place(online, Vector2(120, 1610), Vector2(840, 55), menu_layer)
 
 func _build_pause_ui() -> void:
@@ -281,7 +285,7 @@ func _build_leaderboard_ui() -> void:
     _place(back, Vector2(70, 55), Vector2(160, 62), leaderboard_layer)
     back.pressed.connect(func() -> void: _show_screen(AppScreen.MENU))
 
-    var eyebrow := _make_muted_label("GLOBAL · iOS + ANDROID", 20, HORIZONTAL_ALIGNMENT_CENTER)
+    var eyebrow := _make_muted_label(RankingCaptions.ranking(_ranking_platform()), 20, HORIZONTAL_ALIGNMENT_CENTER)
     _place(eyebrow, Vector2(160, 135), Vector2(760, 40), leaderboard_layer)
 
     var title := _make_label("WORLD RANKING", 60, HORIZONTAL_ALIGNMENT_CENTER)

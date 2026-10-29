@@ -1,5 +1,6 @@
 extends Control
 
+const RankingCaptions = preload("res://scripts/ranking_captions.gd")
 const SAVE_PATH := "user://save.json"
 const APP_VERSION := "1.0.0"
 const TARGET := 100.0
@@ -189,7 +190,7 @@ func _build_menu_ui() -> void:
         _show_screen(AppScreen.SETTINGS)
     )
 
-    var online := _make_label("GLOBAL RANKINGS · iOS + ANDROID", 24, HORIZONTAL_ALIGNMENT_CENTER)
+    var online := _make_label(RankingCaptions.menu(OS.get_name()), 24, HORIZONTAL_ALIGNMENT_CENTER)
     _place(online, Vector2(120, 1420), Vector2(840, 60), menu_layer)
     online.modulate = Color(0.37, 0.43, 0.54)
 

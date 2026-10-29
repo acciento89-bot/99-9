@@ -3,8 +3,10 @@
   "app": "NineNine",
   "package": "de.kamilunavo.ninenine",
   "androidVersionName": "1.2.0",
-  "androidVersionCode": 7,
+  "androidVersionCode": 8,
   "savedLiveMax": 6,
+  "reservedUnpublishedVersionCodes": [7],
+  "versionDecision": "Owner reserved code 8 for original-audio successor; code 7 at d2790fd808d1f218e6bdf72e2ef8102916826893 was QA-built but never uploaded, per root instruction. This does not change historical live max 6; provider max must be freshly checked before delivery.",
   "providerEvidence": "production-preflight-40863704549.json",
   "androidPresetNames": [
     "Android Playtest"
