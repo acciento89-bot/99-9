@@ -18,7 +18,8 @@ jobs:
     env:
       APP_ID: 99-9
       PACKAGE_NAME: de.kamilunavo.ninenine
-      EXPECTED_VERSION_CODE: '6'
+      EXPECTED_VERSION_CODE: '7'
+      EXPECTED_VERSION_NAME: 1.2.0
       GODOT_VERSION: 4.7.2
       GODOT_TAG: 4.7.2-stable
     steps:
@@ -26,6 +27,8 @@ jobs:
       with:
         persist-credentials: false
         ref: ${{ github.sha }}
+    - name: Validate Android release metadata and pinned licence packaging
+      run: python3 scripts/test_android_release_source.py
     - uses: actions/setup-java@v5
       with:
         distribution: temurin
@@ -72,8 +75,8 @@ jobs:
         from pathlib import Path
         import os
         p=Path('export_presets.cfg'); s=p.read_text()
-        assert s.count('version/code=6')==1
-        assert s.count('version/name="1.1.0"')==1
+        assert s.count('version/code=7')==1
+        assert s.count('version/name="1.2.0"')==1
         lines=[l for l in s.splitlines() if not l.startswith(('keystore/release=','keystore/release_user=','keystore/release_password='))]
         s='\n'.join(lines)+'\n'
         anchor='gradle_build/export_format=1'
@@ -112,7 +115,8 @@ jobs:
     env:
       APP_ID: 99-9
       PACKAGE_NAME: de.kamilunavo.ninenine
-      EXPECTED_VERSION_CODE: '6'
+      EXPECTED_VERSION_CODE: '7'
+      EXPECTED_VERSION_NAME: 1.2.0
     steps:
     - uses: actions/setup-java@v5
       with:
@@ -133,6 +137,8 @@ jobs:
         code=$(java -jar "$RUNNER_TEMP/bundletool.jar" dump manifest --bundle=input/app.aab --xpath='/manifest/@android:versionCode')
         test "$package" = "$PACKAGE_NAME"
         test "$code" = "$EXPECTED_VERSION_CODE"
+        name=$(java -jar "$RUNNER_TEMP/bundletool.jar" dump manifest --bundle=input/app.aab --xpath='/manifest/@android:versionName')
+        test "$name" = "$EXPECTED_VERSION_NAME"
         mkdir -p signed
         python3 - <<'PY'
         import zipfile
@@ -162,6 +168,7 @@ jobs:
         java -jar "$RUNNER_TEMP/bundletool.jar" validate --bundle=signed/app.aab
         test "$(java -jar "$RUNNER_TEMP/bundletool.jar" dump manifest --bundle=signed/app.aab --xpath='/manifest/@package')" = "$PACKAGE_NAME"
         test "$(java -jar "$RUNNER_TEMP/bundletool.jar" dump manifest --bundle=signed/app.aab --xpath='/manifest/@android:versionCode')" = "$EXPECTED_VERSION_CODE"
+        test "$(java -jar "$RUNNER_TEMP/bundletool.jar" dump manifest --bundle=signed/app.aab --xpath='/manifest/@android:versionName')" = "$EXPECTED_VERSION_NAME"
         filename="$APP_ID-v$EXPECTED_VERSION_CODE-central.aab"
         mv signed/app.aab "signed/$filename"
         (cd signed && sha256sum "$filename" > "$filename.sha256")
@@ -175,7 +182,7 @@ jobs:
     - name: Preserve verified release bundle
       uses: actions/upload-artifact@v4
       with:
-        name: 99-9-v6-central-signed-aab
+        name: 99-9-v7-central-signed-aab
         path: signed/
         if-no-files-found: error
         retention-days: 30

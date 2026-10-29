@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "app": "NineNine",
+  "package": "de.kamilunavo.ninenine",
+  "androidVersionName": "1.2.0",
+  "androidVersionCode": 7,
+  "savedLiveMax": 6,
+  "providerEvidence": "production-preflight-40863704549.json",
+  "androidPresetNames": [
+    "Android Playtest"
+  ],
+  "preservedIOSPresetSha256": "0907166285e6c1ac00b9d91688dd033e4500a37e03ad8c600b1c86e71b057488",
+  "preservedSharedProjectVersion": "1.1.0",
+  "preservedProjectGodotSha256": "dac47ac08146072a5c8e0c7093af0f7ad827099afec10fd8bb6a4f412f349bf4",
+  "sourceWorkflow": ".github/workflows/android-central-bundle.yml",
+  "rawLicenseFiles": {
+    "licenses/godot-iap-3.0.2/LICENSE.txt": "243adbe048bbec60be2faf9ae1e62c5221327d20ffbc13b1c80e82fa98127af1"
+  },
+  "iapSDKVersionUnchanged": "3.0.2",
+  "iapExactPinnedSourceCommit": "7d1024380252f14b4062434a35f7023794559246",
+  "rightsScope": "Exact original MIT repository licence referenced by pinned godot-iap README; not a blanket warranty for every dependency."
+}
