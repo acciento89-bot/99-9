@@ -155,7 +155,8 @@ func main_menu_layout_checks(path: String) -> void:
         app._practice_layout()
         var previous_bottom := -INF
         var menu_rect := app._practice_menu_scroll.get_global_rect()
-        for action in actions:
+        for node in actions:
+            var action := node as Button
             var bounds := action.get_global_rect()
             check(bounds.position.y >= previous_bottom, "actual container menu actions never overlap at " + str(viewport))
             check(bounds.size.y + .1 >= 48.0 * app._practice_unit, "menu action keeps a 48dp touch height at " + str(viewport))
@@ -165,7 +166,7 @@ func main_menu_layout_checks(path: String) -> void:
             check(app._practice_menu_scroll.get_v_scroll_bar().max_value > app._practice_menu_scroll.size.y, "compact main menu exposes vertical scrolling")
         app._practice_menu_scroll.scroll_vertical = int(app._practice_menu_scroll.get_v_scroll_bar().max_value)
         await process_frame
-        var settings: Button = actions.back()
+        var settings := actions.back() as Button
         check(menu_rect.encloses(settings.get_global_rect()), "Settings stays reachable below practice at " + str(viewport))
         for footer in app._practice_menu_footer_offsets:
             check(footer.get_global_rect().position.y >= settings.get_global_rect().end.y, "menu footer follows the final actual action")
@@ -199,7 +200,7 @@ func main_menu_layout_checks(path: String) -> void:
     await process_frame
     app._practice_menu_scroll.scroll_vertical = int(app._practice_menu_scroll.get_v_scroll_bar().max_value)
     await process_frame
-    var final_settings: Button = actions.back()
+    var final_settings := actions.back() as Button
     origin = final_settings.get_global_rect().get_center()
     send_touch(origin, true)
     send_touch(origin, false)
