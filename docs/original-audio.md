@@ -14,6 +14,7 @@ python3 scripts/test_original_audio.py
 python3 scripts/test_android_release_source.py
 bash scripts/run-audio-tests.sh /path/to/Godot-4.7.2
 bash scripts/run-audio-tests.sh /path/to/Godot-4.7.2 practice
+bash scripts/run-audio-tests.sh /path/to/Godot-4.7.2 settings
 bash scripts/run-practice-core-tests.sh /path/to/Godot-4.7.2
 bash scripts/run-practice-archive-tests.sh /path/to/Godot-4.7.2
 ```

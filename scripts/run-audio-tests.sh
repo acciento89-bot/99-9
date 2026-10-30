@@ -7,7 +7,8 @@ audio_suite=${2:-audio}
 case "$audio_suite" in
     audio) audio_test=audio_tests.gd; audio_marker='NN AUDIO PASS checks=' ;;
     practice) audio_test=practice_integration_tests.gd; audio_marker='NN PRACTICE INTEGRATION PASS checks=' ;;
-    *) printf '%s\n' 'Expected suite: audio or practice' >&2; exit 2 ;;
+    settings) audio_test=settings_touch_tests.gd; audio_marker='NN SETTINGS TOUCH PASS checks=' ;;
+    *) printf '%s\n' 'Expected suite: audio, practice or settings' >&2; exit 2 ;;
 esac
 audio_temp=$(mktemp -d "${TMPDIR:-/tmp}/ninenine-audio-tests.XXXXXX")
 trap 'rm -rf -- "$audio_temp"' EXIT HUP INT TERM

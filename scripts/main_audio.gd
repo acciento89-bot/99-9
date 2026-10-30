@@ -36,9 +36,11 @@ func _build_settings_ui() -> void:
     _audio_settings_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
     settings_layer.add_child(_audio_settings_scroll)
     var content := Control.new()
+    content.mouse_filter = Control.MOUSE_FILTER_PASS
     content.custom_minimum_size = Vector2(1080, 1755)
     _audio_settings_scroll.add_child(content)
     _audio_settings_canvas = Control.new()
+    _audio_settings_canvas.mouse_filter = Control.MOUSE_FILTER_PASS
     _audio_settings_canvas.size = Vector2(1080, 1755)
     content.add_child(_audio_settings_canvas)
     # Keep all real original cards, callbacks and nested controls intact.
@@ -64,6 +66,10 @@ func _build_settings_ui() -> void:
     _audio_status = _make_muted_label("", 20, HORIZONTAL_ALIGNMENT_LEFT)
     _place(_audio_status, Vector2(45, 210), Vector2(730, 50), _audio_panel)
     _audio_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    # Touch drags must reach PracticeTouchScroll through every wrapper/button.
+    # Its scroll-begin notification cancels child clicks; LineEdit keeps editing.
+    for button in _audio_settings_canvas.find_children("*", "Button", true, false):
+        button.mouse_filter = Control.MOUSE_FILTER_PASS
     _audio.settings_changed.connect(_audio_refresh_settings)
     _audio_refresh_settings()
 
