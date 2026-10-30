@@ -99,7 +99,7 @@ func run_checks() -> void:
     check(audio.music_enabled and audio.sound_enabled, "both independent preferences default on")
     check(audio.get_child_count() == 3 and audio.music_player.playing, "one music owner with exactly three bounded players")
     check(audio.music_player.stream.loop_mode == AudioStreamWAV.LOOP_FORWARD, "actual WAV stream loops")
-    check(audio.music_player.stream.loop_end == 24 * 22050, "full exact generated loop")
+    check(audio.music_player.stream.loop_end == 24 * 22050 - 1, "last valid frame of the original24s audio")
     check(audio.music_player.volume_db <= -18.0, "quiet default music gain")
     app._open_settings()
     await process_frame

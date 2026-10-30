@@ -29,7 +29,7 @@ func _ready() -> void:
     music_player = _player("Music", "precision-loop.wav", MUSIC_DB)
     music_player.stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
     music_player.stream.loop_begin = 0
-    music_player.stream.loop_end = 24 * 22050
+    music_player.stream.loop_end = 24 * 22050 - 1
     ui_player = _player("UI", "ui.wav", SOUND_DB)
     result_player = _player("Outcome", "hit.wav", SOUND_DB)
     hit_stream = result_player.stream
